@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: tailscale-porkbun-dns-sync
+  DOCKERHUB_IMAGE: digitaleagle/tailscale-porkbun-dns-sync
+  GHCR_IMAGE: ghcr.io/thedigitaleagle/tailscale-porkbun-dns-sync
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+
+      - name: Build and push arm64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Build release notes from changelog
+        id: notes
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v version="$version" '
+            $0 ~ "^## \\[" version "\\]" {capture=1; next}
+            /^## \[/ && capture {exit}
+            capture {print}
+          ' CHANGELOG.md > release-notes.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md

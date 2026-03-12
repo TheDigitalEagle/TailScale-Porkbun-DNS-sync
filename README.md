@@ -7,6 +7,7 @@
 [![DNS](https://img.shields.io/badge/DNS-Porkbun-orange)](#what-it-does)
 [![Scheduler](https://img.shields.io/badge/Mode-interval%20sync-success)](#deployment)
 [![Version](https://img.shields.io/badge/Version-1.0.0-black)](#changelog)
+[![Release](https://img.shields.io/badge/Release-GitHub%20Actions-blue)](#release-process)
 
 TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`.
 
@@ -147,6 +148,15 @@ It does three jobs:
 
 Tailscale state is persisted in a named Docker volume, so the node does not need to re-authenticate every time the container restarts.
 
+## Container Images
+
+Release builds are intended to publish to:
+
+- Docker Hub: `digitaleagle/tailscale-porkbun-dns-sync`
+- GitHub Container Registry: `ghcr.io/thedigitaleagle/tailscale-porkbun-dns-sync`
+
+The current release workflow publishes `linux/arm64`. `linux/amd64` can be added later by extending the workflow platform list.
+
 ## Example Operations
 
 ### Restart after config changes
@@ -185,6 +195,34 @@ docker run --rm -v "$PWD:/src" -w /src golang:1.25 go test ./...
 
 ```sh
 docker build -t porkbun-dns .
+```
+
+## Release Process
+
+Version `1.0.0` is tracked in [VERSION](/home/chad/porkbun-dns/VERSION) and documented in [CHANGELOG.md](/home/chad/porkbun-dns/CHANGELOG.md).
+
+GitHub Actions workflows:
+
+- `.github/workflows/ci.yml` runs `go test ./...` on pushes and pull requests
+- `.github/workflows/release.yml` runs on version tags like `v1.0.0`
+
+The release workflow does four things:
+
+1. runs tests
+2. builds and pushes the `linux/arm64` container image to Docker Hub and GHCR
+3. tags the image as both the pushed version and `latest`
+4. creates a GitHub Release using the matching section from `CHANGELOG.md`
+
+Required GitHub repository secrets:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+To cut a release:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 ## Versioning
