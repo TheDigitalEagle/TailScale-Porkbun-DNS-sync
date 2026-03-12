@@ -1,0 +1,27 @@
+# Local secrets and operator notes
+.env
+.env.*
+!.env.example
+resources.md
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+
+# Tailscale local state
+tailscaled.state
+ts-state/
+
+# Go build and test artifacts
+bin/
+dist/
+coverage.out
+*.test
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

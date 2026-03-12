@@ -1,0 +1,25 @@
+services:
+  porkbun-dns:
+    build:
+      context: .
+    container_name: porkbun-dns
+    environment:
+      PORKBUN_API_KEY: ${PORKBUN_API_KEY}
+      PORKBUN_SECRET_API_KEY: ${PORKBUN_SECRET_API_KEY}
+      PORKBUN_DOMAIN: ${PORKBUN_DOMAIN:-ima.fish}
+      PORKBUN_SUBDOMAIN_SUFFIX: ${PORKBUN_SUBDOMAIN_SUFFIX:-int}
+      PORKBUN_TTL: ${PORKBUN_TTL:-600}
+      DRY_RUN: ${DRY_RUN:-false}
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-3600}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: ${TS_HOSTNAME:-porkbun-dns}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      TS_TUN_MODE: ${TS_TUN_MODE:-userspace-networking}
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:
