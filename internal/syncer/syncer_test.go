@@ -49,14 +49,14 @@ func TestServiceRun(t *testing.T) {
 
 	client := &fakeClient{
 		records: []porkbun.Record{
-			{ID: "1", Name: "snke-laptop.int", Type: "A", Content: "100.64.0.9", TTL: "600"},
+			{ID: "1", Name: "workstation.int", Type: "A", Content: "100.64.0.9", TTL: "600"},
 			{ID: "2", Name: "tablet.int", Type: "A", Content: "100.64.0.3", TTL: "600"},
 			{ID: "3", Name: "old-box.int", Type: "A", Content: "100.64.0.4", TTL: "600"},
 		},
 	}
 
 	nodes := []tailscale.Node{
-		{Name: "snke-laptop", IPv4: netip.MustParseAddr("100.64.0.1")},
+		{Name: "workstation", IPv4: netip.MustParseAddr("100.64.0.1")},
 		{Name: "tablet", IPv4: netip.MustParseAddr("100.64.0.3")},
 		{Name: "new-node", IPv4: netip.MustParseAddr("100.64.0.5")},
 	}

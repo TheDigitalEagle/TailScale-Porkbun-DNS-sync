@@ -7,8 +7,8 @@ func TestParseStatus(t *testing.T) {
 
 	const payload = `{
 	  "Self": {
-	    "HostName": "snke-laptop",
-	    "DNSName": "snke-laptop.tailnet.ts.net.",
+	    "HostName": "workstation",
+	    "DNSName": "workstation.tailnet.ts.net.",
 	    "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"]
 	  },
 	  "Peer": {
@@ -39,12 +39,21 @@ func TestParseStatus(t *testing.T) {
 		t.Fatalf("len(nodes) = %d, want %d", got, want)
 	}
 
-	if got, want := nodes[0].Name, "media-server"; got != want {
-		t.Fatalf("nodes[0].Name = %q, want %q", got, want)
+	gotByName := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		gotByName[node.Name] = node.IPv4.String()
 	}
 
-	if got, want := nodes[2].IPv4.String(), "100.64.0.3"; got != want {
-		t.Fatalf("nodes[2].IPv4 = %q, want %q", got, want)
+	if got, want := gotByName["media-server"], "100.64.0.2"; got != want {
+		t.Fatalf("media-server IPv4 = %q, want %q", got, want)
+	}
+
+	if got, want := gotByName["tablet"], "100.64.0.3"; got != want {
+		t.Fatalf("tablet IPv4 = %q, want %q", got, want)
+	}
+
+	if got, want := gotByName["workstation"], "100.64.0.1"; got != want {
+		t.Fatalf("workstation IPv4 = %q, want %q", got, want)
 	}
 }
 
@@ -54,8 +63,8 @@ func TestParseStatusPrefersDNSName(t *testing.T) {
 	const payload = `{
 	  "Peer": {
 	    "node-1": {
-	      "HostName": "SNNBW-JRPQX64",
-	      "DNSName": "snke-laptop.tailnet.ts.net.",
+	      "HostName": "DEVICE-1234",
+	      "DNSName": "workstation.tailnet.ts.net.",
 	      "TailscaleIPs": ["100.64.0.2"]
 	    }
 	  }
@@ -69,7 +78,7 @@ func TestParseStatusPrefersDNSName(t *testing.T) {
 	if got, want := len(nodes), 1; got != want {
 		t.Fatalf("len(nodes) = %d, want %d", got, want)
 	}
-	if got, want := nodes[0].Name, "snke-laptop"; got != want {
+	if got, want := nodes[0].Name, "workstation"; got != want {
 		t.Fatalf("nodes[0].Name = %q, want %q", got, want)
 	}
 }

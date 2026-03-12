@@ -6,6 +6,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Tailscale%20base-2496ED?logo=docker&logoColor=white)](#deployment)
 [![DNS](https://img.shields.io/badge/DNS-Porkbun-orange)](#what-it-does)
 [![Scheduler](https://img.shields.io/badge/Mode-interval%20sync-success)](#deployment)
+[![Version](https://img.shields.io/badge/Version-1.0.0-black)](#changelog)
 
 TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`.
 
@@ -33,30 +34,21 @@ It only manages `A` records under the configured subdomain suffix. Everything el
 The sync prefers the label derived from Tailscale `DNSName`, so records follow MagicDNS-style names such as:
 
 ```text
-snke-laptop.int.ima.fish
+workstation.int.ima.fish
 dockerpi.int.ima.fish
 beaglebase.int.ima.fish
 ```
 
 ## Architecture
 
-```text
-Tailscale tailnet
-      |
-      v
-tailscaled + tailscale up
-      |
-      v
-tailscale status --json
-      |
-      v
-Go sync engine
-      |
-      v
-Porkbun DNS API
-      |
-      v
-*.int.<domain> A records
+```mermaid
+flowchart TD
+    A[Tailscale Tailnet] --> B[tailscaled]
+    B --> C[tailscale up]
+    C --> D[tailscale status --json]
+    D --> E[Go Sync Engine]
+    E --> F[Porkbun DNS API]
+    F --> G[Managed A Records<br/>*.int.domain]
 ```
 
 ## Sync Behavior
@@ -195,6 +187,15 @@ docker run --rm -v "$PWD:/src" -w /src golang:1.25 go test ./...
 docker build -t porkbun-dns .
 ```
 
+## Versioning
+
+Current version: `1.0.0`
+
+Version metadata lives in:
+
+- [VERSION](/home/chad/porkbun-dns/VERSION)
+- [CHANGELOG.md](/home/chad/porkbun-dns/CHANGELOG.md)
+
 ### Key implementation points
 
 - the app uses `tailscale status --json`, not brittle text parsing
@@ -218,3 +219,7 @@ Use [.env.example](/home/chad/porkbun-dns/.env.example) as the shareable templat
 ## Notes
 
 This project intentionally uses Tailscale userspace networking inside the container. That keeps the runtime lightweight and avoids requiring a kernel TUN setup just to inspect tailnet membership and update DNS.
+
+## Changelog
+
+See [CHANGELOG.md](/home/chad/porkbun-dns/CHANGELOG.md).
