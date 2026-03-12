@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   packages: write
@@ -28,6 +32,16 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Verify tag matches VERSION
+        shell: bash
+        run: |
+          version_file="$(tr -d '\n' < VERSION)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "${version_file}" != "${tag_version}" ]; then
+            echo "VERSION (${version_file}) does not match tag (${tag_version})" >&2
+            exit 1
+          fi
 
       - name: Run tests
         run: go test ./...
@@ -59,17 +73,21 @@ jobs:
             ${{ env.DOCKERHUB_IMAGE }}
             ${{ env.GHCR_IMAGE }}
           tags: |
-            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             type=raw,value=latest
 
-      - name: Build and push arm64 image
+      - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          platforms: linux/arm64
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build release notes from changelog
         id: notes

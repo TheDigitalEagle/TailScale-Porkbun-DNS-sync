@@ -155,7 +155,17 @@ Release builds are intended to publish to:
 - Docker Hub: `digitaleagle/tailscale-porkbun-dns-sync`
 - GitHub Container Registry: `ghcr.io/thedigitaleagle/tailscale-porkbun-dns-sync`
 
-The current release workflow publishes `linux/arm64`. `linux/amd64` can be added later by extending the workflow platform list.
+The release workflow now publishes a multi-arch image for:
+
+- `linux/amd64`
+- `linux/arm64`
+
+Published tags are:
+
+- `1.0.0`
+- `1.0`
+- `1`
+- `latest`
 
 ## Example Operations
 
@@ -209,9 +219,12 @@ GitHub Actions workflows:
 The release workflow does four things:
 
 1. runs tests
-2. builds and pushes the `linux/arm64` container image to Docker Hub and GHCR
-3. tags the image as both the pushed version and `latest`
-4. creates a GitHub Release using the matching section from `CHANGELOG.md`
+2. verifies the pushed git tag matches [VERSION](/home/chad/porkbun-dns/VERSION)
+3. builds and pushes multi-arch container images to Docker Hub and GHCR
+4. tags images with semver aliases plus `latest`
+5. creates a GitHub Release using the matching section from `CHANGELOG.md`
+
+Normal pushes to `main` do not publish containers. Image publishing only happens for version tags like `v1.0.0`, which prevents rebuilds when the version has not changed.
 
 Required GitHub repository secrets:
 
