@@ -1,8 +1,8 @@
 services:
-  porkbun-dns:
+  tailscale-porkbun-dns-sync:
     build:
       context: .
-    container_name: porkbun-dns
+    container_name: tailscale-porkbun-dns-sync
     environment:
       PORKBUN_API_KEY: ${PORKBUN_API_KEY}
       PORKBUN_SECRET_API_KEY: ${PORKBUN_SECRET_API_KEY}
@@ -12,7 +12,7 @@ services:
       DRY_RUN: ${DRY_RUN:-false}
       SYNC_INTERVAL: ${SYNC_INTERVAL:-3600}
       TS_AUTHKEY: ${TS_AUTHKEY:-}
-      TS_HOSTNAME: ${TS_HOSTNAME:-porkbun-dns}
+      TS_HOSTNAME: ${TS_HOSTNAME:-tailscale-porkbun-dns-sync}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
       TS_TUN_MODE: ${TS_TUN_MODE:-userspace-networking}

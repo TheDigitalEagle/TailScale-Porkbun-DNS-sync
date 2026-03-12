@@ -1,109 +1,220 @@
-# porkbun-dns
+# TailScale Porkbun DNS Sync
 
-`porkbun-dns` is a small Go service that joins a Tailscale tailnet, reads `tailscale status --json`, and keeps Porkbun `A` records in sync for a delegated subdomain such as `*.int.ima.fish`.
+> Automatic Porkbun DNS updates from live Tailscale peer state.
 
-It is packaged as a Docker image built on top of `tailscale/tailscale:latest`, so the same container can:
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](#development)
+[![Docker](https://img.shields.io/badge/Docker-Tailscale%20base-2496ED?logo=docker&logoColor=white)](#deployment)
+[![DNS](https://img.shields.io/badge/DNS-Porkbun-orange)](#what-it-does)
+[![Scheduler](https://img.shields.io/badge/Mode-interval%20sync-success)](#deployment)
 
-- start `tailscaled`
-- authenticate with a Tailscale auth key
-- inspect tailnet peers
-- create, update, and delete Porkbun DNS records
-- repeat the sync on a fixed interval
+TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`.
 
-## What It Syncs
+The repository name is user-facing. The runtime binary remains `porkbun-dns`.
 
-For each tailnet node with an IPv4 Tailscale address, the service creates or updates:
+## Why This Exists
+
+Tailscale gives every node a stable tailnet identity and IP, but external DNS providers do not update themselves from that state. This project closes that gap by turning live tailnet membership into DNS records you can actually use.
+
+It is built for operators who want:
+
+- machine names from Tailscale reflected in Porkbun
+- one container that authenticates, syncs, and keeps running
+- no manual record editing for tailnet nodes
+- a simple scheduled reconciliation loop instead of brittle ad hoc scripts
+
+## What It Does
+
+For each Tailscale node with an IPv4 address, the service manages:
 
 - `<machine>.int.<domain>` -> `<tailscale-ip>`
 
-It manages only `A` records under the configured subdomain suffix. Records outside that scope are ignored.
+It only manages `A` records under the configured subdomain suffix. Everything else in Porkbun is left alone.
 
-The service prefers the node label derived from Tailscale `DNSName`, so records match MagicDNS-style names such as `snke-laptop.int.ima.fish`.
+The sync prefers the label derived from Tailscale `DNSName`, so records follow MagicDNS-style names such as:
 
-## How It Works
+```text
+snke-laptop.int.ima.fish
+dockerpi.int.ima.fish
+beaglebase.int.ima.fish
+```
 
-1. The container starts `tailscaled` in userspace mode.
-2. It runs `tailscale up` with `TS_AUTHKEY` or reuses persisted Tailscale state.
-3. The Go binary reads `tailscale status --json`.
-4. It compares desired names and IPs against Porkbun DNS records.
-5. It creates, updates, and deletes managed records as needed.
-6. It sleeps for `SYNC_INTERVAL` seconds and repeats.
+## Architecture
+
+```text
+Tailscale tailnet
+      |
+      v
+tailscaled + tailscale up
+      |
+      v
+tailscale status --json
+      |
+      v
+Go sync engine
+      |
+      v
+Porkbun DNS API
+      |
+      v
+*.int.<domain> A records
+```
+
+## Sync Behavior
+
+Each run performs the same reconciliation flow:
+
+1. Start or reuse an authenticated `tailscaled` instance.
+2. Fetch local tailnet state with `tailscale status --json`.
+3. Extract node names and IPv4 Tailscale addresses.
+4. Fetch existing Porkbun DNS records.
+5. Create missing records.
+6. Update changed records.
+7. Delete stale records under the managed subdomain.
+8. Sleep for `SYNC_INTERVAL` seconds and repeat.
+
+If `SYNC_INTERVAL` is blank, the container performs one sync and exits.
+
+## Project Layout
+
+```text
+cmd/porkbun-dns/          main program
+internal/config/          env loading and validation
+internal/tailscale/       tailscale status parsing
+internal/porkbun/         Porkbun API client
+internal/syncer/          reconciliation logic
+docker/                   container startup scripts
+compose.yaml              local deployment definition
+```
 
 ## Quick Start
 
-Copy the example env file and fill in your secrets:
+### 1. Create your local environment file
 
 ```sh
 cp .env.example .env
 ```
 
-Start the stack:
-
-```sh
-docker compose up -d --build
-docker compose logs -f porkbun-dns
-```
-
-Check status:
-
-```sh
-docker compose ps
-docker exec porkbun-dns tailscale --socket=/var/run/tailscale/tailscaled.sock status
-```
-
-## Configuration
-
-Required:
+Fill in:
 
 - `PORKBUN_API_KEY`
 - `PORKBUN_SECRET_API_KEY`
 - `PORKBUN_DOMAIN`
-- `TS_AUTHKEY` for first-time Tailscale enrollment
+- `TS_AUTHKEY`
 
-Common optional values:
+### 2. Start the service
 
-- `PORKBUN_SUBDOMAIN_SUFFIX=int`
-- `PORKBUN_TTL=600`
-- `SYNC_INTERVAL=3600`
-- `TS_HOSTNAME=porkbun-dns`
-- `TS_TUN_MODE=userspace-networking`
-- `TS_EXTRA_ARGS=--accept-dns=false`
-- `DRY_RUN=false`
+```sh
+docker compose up -d --build
+```
 
-If `SYNC_INTERVAL` is blank, the container runs a single sync pass and exits.
+### 3. Watch it work
+
+```sh
+docker compose logs -f tailscale-porkbun-dns-sync
+```
+
+### 4. Check the live Tailscale view inside the container
+
+```sh
+docker exec tailscale-porkbun-dns-sync \
+  tailscale --socket=/var/run/tailscale/tailscaled.sock status
+```
+
+## Configuration
+
+### Required
+
+| Variable | Purpose |
+| --- | --- |
+| `PORKBUN_API_KEY` | Porkbun API key |
+| `PORKBUN_SECRET_API_KEY` | Porkbun secret API key |
+| `PORKBUN_DOMAIN` | Root DNS zone, for example `ima.fish` |
+| `TS_AUTHKEY` | Tailscale auth key for first-time enrollment |
+
+### Common Optional
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORKBUN_SUBDOMAIN_SUFFIX` | `int` | Managed subdomain suffix |
+| `PORKBUN_TTL` | `600` | TTL for managed `A` records |
+| `SYNC_INTERVAL` | `3600` | Sync loop interval in seconds |
+| `TS_HOSTNAME` | `tailscale-porkbun-dns-sync` | Tailnet hostname for this container |
+| `TS_TUN_MODE` | `userspace-networking` | Tailscale container networking mode |
+| `TS_EXTRA_ARGS` | `--accept-dns=false` | Extra args passed to `tailscale up` |
+| `DRY_RUN` | `false` | Compute changes without mutating Porkbun |
+
+## Deployment
+
+The included [compose.yaml](/home/chad/porkbun-dns/compose.yaml) is the intended operational path.
+
+It does three jobs:
+
+- starts `tailscaled`
+- authenticates or reuses saved Tailscale state
+- runs the Go sync process on an interval
+
+Tailscale state is persisted in a named Docker volume, so the node does not need to re-authenticate every time the container restarts.
+
+## Example Operations
+
+### Restart after config changes
+
+```sh
+docker compose up -d
+```
+
+### Follow logs
+
+```sh
+docker compose logs -f tailscale-porkbun-dns-sync
+```
+
+### Inspect service status
+
+```sh
+docker compose ps
+```
+
+### Run one-shot mode
+
+```sh
+docker compose run --rm -e SYNC_INTERVAL= tailscale-porkbun-dns-sync
+```
 
 ## Development
 
-Run tests:
+### Run tests
 
 ```sh
 docker run --rm -v "$PWD:/src" -w /src golang:1.25 go test ./...
 ```
 
-Build the image:
+### Build the image
 
 ```sh
 docker build -t porkbun-dns .
 ```
 
-## Repository Layout
+### Key implementation points
 
-- `cmd/porkbun-dns/` main program
-- `internal/config/` environment loading
-- `internal/tailscale/` Tailscale status parsing
-- `internal/porkbun/` Porkbun API client
-- `internal/syncer/` DNS reconciliation logic
-- `docker/` container startup scripts
-- `compose.yaml` local deployment definition
+- the app uses `tailscale status --json`, not brittle text parsing
+- only managed `A` records under the delegated subdomain are touched
+- duplicate managed records are collapsed during reconciliation
+- name selection prefers Tailscale `DNSName` over raw `HostName`
 
 ## Security
 
 Do not commit live credentials, auth keys, or local state.
 
-The following should remain local only:
+Keep these local only:
 
 - `.env`
 - `resources.md`
-- Tailscale state volumes or exported state files
+- exported Tailscale state
+- private keys, certs, or ad hoc operator notes
 
-Use `.env.example` as the shareable template and rotate any secret that is ever committed accidentally.
+Use [.env.example](/home/chad/porkbun-dns/.env.example) as the shareable template. If a secret is ever committed accidentally, rotate it immediately.
+
+## Notes
+
+This project intentionally uses Tailscale userspace networking inside the container. That keeps the runtime lightweight and avoids requiring a kernel TUN setup just to inspect tailnet membership and update DNS.
