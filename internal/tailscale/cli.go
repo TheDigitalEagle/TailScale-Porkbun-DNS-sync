@@ -34,9 +34,10 @@ type statusResponse struct {
 }
 
 type peerInfo struct {
-	HostName     string   `json:"HostName"`
-	DNSName      string   `json:"DNSName"`
-	TailscaleIPs []string `json:"TailscaleIPs"`
+	HostName     string                     `json:"HostName"`
+	DNSName      string                     `json:"DNSName"`
+	TailscaleIPs []string                   `json:"TailscaleIPs"`
+	CapMap       map[string]json.RawMessage `json:"CapMap"`
 }
 
 func (c *CLI) Status(ctx context.Context) ([]Node, error) {
@@ -57,14 +58,10 @@ func ParseStatus(data []byte) ([]Node, error) {
 
 	nodes := make([]Node, 0, len(resp.Peer)+1)
 	if resp.Self != nil {
-		if node, ok := parsePeer(resp.Self); ok {
-			nodes = append(nodes, node)
-		}
+		nodes = append(nodes, parsePeer(resp.Self)...)
 	}
 	for _, peer := range resp.Peer {
-		if node, ok := parsePeer(peer); ok {
-			nodes = append(nodes, node)
-		}
+		nodes = append(nodes, parsePeer(peer)...)
 	}
 
 	sort.Slice(nodes, func(i, j int) bool {
@@ -74,28 +71,87 @@ func ParseStatus(data []byte) ([]Node, error) {
 	return dedupe(nodes), nil
 }
 
-func parsePeer(peer *peerInfo) (Node, bool) {
+func parsePeer(peer *peerInfo) []Node {
 	if peer == nil {
-		return Node{}, false
+		return nil
 	}
 
+	nodes := make([]Node, 0, 1)
 	name := normalizeHostname(strings.Split(strings.TrimSuffix(peer.DNSName, "."), ".")[0])
 	if name == "" {
 		name = normalizeHostname(peer.HostName)
 	}
-	if name == "" {
-		return Node{}, false
+	if name != "" {
+		if addr, ok := firstIPv4(peer.TailscaleIPs); ok {
+			nodes = append(nodes, Node{Name: name, IPv4: addr})
+		}
 	}
 
-	for _, rawIP := range peer.TailscaleIPs {
+	for serviceName, addr := range parseServiceHosts(peer.CapMap) {
+		nodes = append(nodes, Node{Name: serviceName, IPv4: addr})
+	}
+
+	return nodes
+}
+
+func firstIPv4(ips []string) (netip.Addr, bool) {
+	for _, rawIP := range ips {
 		addr, err := netip.ParseAddr(strings.TrimSpace(rawIP))
 		if err != nil || !addr.Is4() {
 			continue
 		}
-		return Node{Name: name, IPv4: addr}, true
+		return addr, true
+	}
+	return netip.Addr{}, false
+}
+
+func parseServiceHosts(capMap map[string]json.RawMessage) map[string]netip.Addr {
+	if len(capMap) == 0 {
+		return nil
 	}
 
-	return Node{}, false
+	raw, ok := capMap["service-host"]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+
+	services := make(map[string]netip.Addr)
+
+	var arrayShape []map[string][]string
+	if err := json.Unmarshal(raw, &arrayShape); err == nil {
+		for _, item := range arrayShape {
+			collectServiceHosts(item, services)
+		}
+		return services
+	}
+
+	var objectShape map[string][]string
+	if err := json.Unmarshal(raw, &objectShape); err == nil {
+		collectServiceHosts(objectShape, services)
+		return services
+	}
+
+	return nil
+}
+
+func collectServiceHosts(input map[string][]string, services map[string]netip.Addr) {
+	for rawName, ips := range input {
+		name := normalizeServiceName(rawName)
+		if name == "" {
+			continue
+		}
+		addr, ok := firstIPv4(ips)
+		if !ok {
+			continue
+		}
+		services[name] = addr
+	}
+}
+
+func normalizeServiceName(name string) string {
+	name = strings.TrimSpace(strings.ToLower(name))
+	name = strings.TrimPrefix(name, "svc:")
+	return normalizeHostname(name)
 }
 
 func normalizeHostname(name string) string {

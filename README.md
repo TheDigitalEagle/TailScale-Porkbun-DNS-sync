@@ -9,7 +9,7 @@
 [![Version](https://img.shields.io/badge/Version-1.0.0-black)](#changelog)
 [![Release](https://img.shields.io/badge/Release-GitHub%20Actions-blue)](#release-process)
 
-TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`.
+TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`. It can also optionally act as dynamic DNS by checking your public IPv4 address each run and syncing the zone apex plus wildcard record.
 
 The repository name is user-facing. The runtime binary remains `porkbun-dns`.
 
@@ -20,6 +20,7 @@ Tailscale gives every node a stable tailnet identity and IP, but external DNS pr
 It is built for operators who want:
 
 - machine names from Tailscale reflected in Porkbun
+- Tailscale Services reflected in Porkbun when advertised via `service-host`
 - one container that authenticates, syncs, and keeps running
 - no manual record editing for tailnet nodes
 - a simple scheduled reconciliation loop instead of brittle ad hoc scripts
@@ -30,7 +31,16 @@ For each Tailscale node with an IPv4 address, the service manages:
 
 - `<machine>.int.<domain>` -> `<tailscale-ip>`
 
-It only manages `A` records under the configured subdomain suffix. Everything else in Porkbun is left alone.
+When public-IP sync is enabled, the service also manages:
+
+- `<domain>` -> `<public-ip>`
+- `*.<domain>` -> `<public-ip>`
+
+For each advertised Tailscale Service with an IPv4 address, the service can also manage:
+
+- `<service>.int.<domain>` -> `<tailscale-service-ip>`
+
+By default it only manages `A` records under the configured subdomain suffix. When public-IP sync is enabled it also manages the apex and wildcard `A` records for the root zone. Everything else in Porkbun is left alone.
 
 The sync prefers the label derived from Tailscale `DNSName`, so records follow MagicDNS-style names such as:
 
@@ -38,6 +48,8 @@ The sync prefers the label derived from Tailscale `DNSName`, so records follow M
 workstation.int.ima.fish
 dockerpi.int.ima.fish
 beaglebase.int.ima.fish
+pihole.int.ima.fish
+ha.int.ima.fish
 ```
 
 ## Architecture
@@ -58,12 +70,13 @@ Each run performs the same reconciliation flow:
 
 1. Start or reuse an authenticated `tailscaled` instance.
 2. Fetch local tailnet state with `tailscale status --json`.
-3. Extract node names and IPv4 Tailscale addresses.
+3. Extract node names, advertised service names, and IPv4 Tailscale addresses.
 4. Fetch existing Porkbun DNS records.
-5. Create missing records.
-6. Update changed records.
-7. Delete stale records under the managed subdomain.
-8. Sleep for `SYNC_INTERVAL` seconds and repeat.
+5. Optionally fetch the current public IPv4 address for apex and wildcard dynamic DNS.
+6. Create missing records.
+7. Update changed records.
+8. Delete stale records under the managed subdomain and deduplicate apex or wildcard records it owns.
+9. Sleep for `SYNC_INTERVAL` seconds and repeat.
 
 If `SYNC_INTERVAL` is blank, the container performs one sync and exits.
 
@@ -130,6 +143,8 @@ docker exec tailscale-porkbun-dns-sync \
 | --- | --- | --- |
 | `PORKBUN_SUBDOMAIN_SUFFIX` | `int` | Managed subdomain suffix |
 | `PORKBUN_TTL` | `600` | TTL for managed `A` records |
+| `PUBLIC_IP_ENABLED` | `false` | Also sync apex (`@`) and wildcard (`*`) to the current public IPv4 |
+| `PUBLIC_IP_LOOKUP_URL` | `https://api.ipify.org` | HTTP endpoint that returns the current public IPv4 as plain text |
 | `SYNC_INTERVAL` | `3600` | Sync loop interval in seconds |
 | `TS_HOSTNAME` | `tailscale-porkbun-dns-sync` | Tailnet hostname for this container |
 | `TS_TUN_MODE` | `userspace-networking` | Tailscale container networking mode |
@@ -253,6 +268,7 @@ Version metadata lives in:
 - only managed `A` records under the delegated subdomain are touched
 - duplicate managed records are collapsed during reconciliation
 - name selection prefers Tailscale `DNSName` over raw `HostName`
+- advertised Tailscale Services are parsed from `CapMap["service-host"]`
 
 ## Security
 

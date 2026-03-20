@@ -17,6 +17,10 @@ type tailscaleSource interface {
 	Status(context.Context) ([]tailscale.Node, error)
 }
 
+type PublicIPSource interface {
+	IPv4(context.Context) (netip.Addr, error)
+}
+
 type dnsClient interface {
 	ListRecords(context.Context, string) ([]porkbun.Record, error)
 	CreateRecord(context.Context, string, porkbun.Record) error
@@ -26,6 +30,7 @@ type dnsClient interface {
 
 type Service struct {
 	tailscale tailscaleSource
+	publicIP  PublicIPSource
 	client    dnsClient
 	cfg       config.Config
 }
@@ -38,23 +43,41 @@ type Result struct {
 	Deleted   int
 }
 
-func New(ts tailscaleSource, client dnsClient, cfg config.Config) *Service {
+func New(ts tailscaleSource, publicIP PublicIPSource, client dnsClient, cfg config.Config) *Service {
 	return &Service{
 		tailscale: ts,
+		publicIP:  publicIP,
 		client:    client,
 		cfg:       cfg,
 	}
 }
 
 func (s *Service) Run(ctx context.Context) (Result, error) {
+	desired := make(map[string]netip.Addr)
+
 	nodes, err := s.tailscale.Status(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-
-	desired := make(map[string]netip.Addr, len(nodes))
 	for _, node := range nodes {
 		desired[recordName(node.Name, s.cfg.SubdomainSuffix)] = node.IPv4
+	}
+
+	managedNames := make(map[string]struct{}, 2)
+	if s.cfg.PublicIPEnabled {
+		if s.publicIP == nil {
+			return Result{}, fmt.Errorf("public IP sync enabled without a public IP source")
+		}
+
+		addr, err := s.publicIP.IPv4(ctx)
+		if err != nil {
+			return Result{}, fmt.Errorf("lookup public IPv4: %w", err)
+		}
+
+		for _, name := range []string{"", "*"} {
+			desired[name] = addr
+			managedNames[name] = struct{}{}
+		}
 	}
 
 	records, err := s.client.ListRecords(ctx, s.cfg.Domain)
@@ -62,7 +85,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 
-	filtered := filterManagedRecords(records, s.cfg.Domain, s.cfg.SubdomainSuffix)
+	filtered := filterManagedRecords(records, s.cfg.Domain, s.cfg.SubdomainSuffix, managedNames)
 	result := Result{Desired: len(desired)}
 
 	seen := make(map[string]bool, len(filtered))
@@ -102,14 +125,14 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 			Prio:    "0",
 		}
 		if s.cfg.DryRun {
-			log.Printf("dry-run create %s -> %s", record.Name, record.Content)
+			log.Printf("dry-run create %s -> %s", displayName(record.Name), record.Content)
 			result.Created++
 			continue
 		}
 		if err := s.client.CreateRecord(ctx, s.cfg.Domain, record); err != nil {
 			return Result{}, fmt.Errorf("create %s: %w", name, err)
 		}
-		log.Printf("created %s -> %s", record.Name, record.Content)
+		log.Printf("created %s -> %s", displayName(record.Name), record.Content)
 		result.Created++
 	}
 
@@ -133,7 +156,7 @@ func (s *Service) reconcileExisting(ctx context.Context, name string, wantIP net
 
 	if s.cfg.DryRun {
 		if needsUpdate {
-			log.Printf("dry-run update %s -> %s", name, wantIP)
+			log.Printf("dry-run update %s -> %s", displayName(name), wantIP)
 			result.Updated++
 		} else {
 			result.Unchanged++
@@ -142,7 +165,7 @@ func (s *Service) reconcileExisting(ctx context.Context, name string, wantIP net
 		if err := s.client.EditRecord(ctx, s.cfg.Domain, primary); err != nil {
 			return fmt.Errorf("update %s: %w", name, err)
 		}
-		log.Printf("updated %s -> %s", name, wantIP)
+		log.Printf("updated %s -> %s", displayName(name), wantIP)
 		result.Updated++
 	} else {
 		result.Unchanged++
@@ -150,27 +173,31 @@ func (s *Service) reconcileExisting(ctx context.Context, name string, wantIP net
 
 	for _, duplicate := range existing[1:] {
 		if s.cfg.DryRun {
-			log.Printf("dry-run delete duplicate %s (%s)", duplicate.Name, duplicate.Content)
+			log.Printf("dry-run delete duplicate %s (%s)", displayName(duplicate.Name), duplicate.Content)
 			result.Deleted++
 			continue
 		}
 		if err := s.client.DeleteRecord(ctx, s.cfg.Domain, duplicate.ID); err != nil {
 			return fmt.Errorf("delete duplicate %s: %w", name, err)
 		}
-		log.Printf("deleted duplicate %s (%s)", duplicate.Name, duplicate.Content)
+		log.Printf("deleted duplicate %s (%s)", displayName(duplicate.Name), duplicate.Content)
 		result.Deleted++
 	}
 
 	return nil
 }
 
-func filterManagedRecords(records []porkbun.Record, domain, subdomain string) map[string][]porkbun.Record {
+func filterManagedRecords(records []porkbun.Record, domain, subdomain string, exact map[string]struct{}) map[string][]porkbun.Record {
 	managed := make(map[string][]porkbun.Record)
 	for _, record := range records {
 		if strings.ToUpper(record.Type) != "A" {
 			continue
 		}
 		name := normalizeRecordName(record.Name, domain)
+		if _, ok := exact[name]; ok {
+			managed[name] = append(managed[name], record)
+			continue
+		}
 		if name == "" || !strings.HasSuffix(name, "."+subdomain) {
 			continue
 		}
@@ -196,4 +223,11 @@ func normalizeRecordName(name, domain string) string {
 
 func recordName(hostname, subdomain string) string {
 	return strings.Trim(strings.ToLower(hostname), ".") + "." + strings.Trim(strings.ToLower(subdomain), ".")
+}
+
+func displayName(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "@"
+	}
+	return name
 }

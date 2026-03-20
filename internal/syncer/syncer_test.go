@@ -18,6 +18,14 @@ func (f fakeTailscale) Status(context.Context) ([]tailscale.Node, error) {
 	return f.nodes, nil
 }
 
+type fakePublicIP struct {
+	addr netip.Addr
+}
+
+func (f fakePublicIP) IPv4(context.Context) (netip.Addr, error) {
+	return f.addr, nil
+}
+
 type fakeClient struct {
 	records []porkbun.Record
 	created []porkbun.Record
@@ -61,7 +69,7 @@ func TestServiceRun(t *testing.T) {
 		{Name: "new-node", IPv4: netip.MustParseAddr("100.64.0.5")},
 	}
 
-	svc := New(fakeTailscale{nodes: nodes}, client, config.Config{
+	svc := New(fakeTailscale{nodes: nodes}, nil, client, config.Config{
 		Domain:          "ima.fish",
 		SubdomainSuffix: "int",
 		TTL:             600,
@@ -97,5 +105,76 @@ func TestServiceRun(t *testing.T) {
 	}
 	if got, want := client.deleted[0], "3"; got != want {
 		t.Fatalf("deleted[0] = %q, want %q", got, want)
+	}
+}
+
+func TestServiceRunWithPublicIPSync(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{
+		records: []porkbun.Record{
+			{ID: "1", Name: "workstation.int", Type: "A", Content: "100.64.0.9", TTL: "600"},
+			{ID: "2", Name: "ima.fish", Type: "A", Content: "203.0.113.9", TTL: "600"},
+			{ID: "3", Name: "*.ima.fish", Type: "A", Content: "203.0.113.10", TTL: "120"},
+			{ID: "4", Name: "*.ima.fish", Type: "A", Content: "203.0.113.11", TTL: "600"},
+			{ID: "5", Name: "www", Type: "A", Content: "203.0.113.15", TTL: "600"},
+		},
+	}
+
+	svc := New(
+		fakeTailscale{
+			nodes: []tailscale.Node{
+				{Name: "workstation", IPv4: netip.MustParseAddr("100.64.0.1")},
+			},
+		},
+		fakePublicIP{addr: netip.MustParseAddr("198.51.100.20")},
+		client,
+		config.Config{
+			Domain:          "ima.fish",
+			SubdomainSuffix: "int",
+			TTL:             600,
+			RecordType:      "A",
+			PublicIPEnabled: true,
+		},
+	)
+
+	result, err := svc.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if got, want := result.Desired, 3; got != want {
+		t.Fatalf("Desired = %d, want %d", got, want)
+	}
+	if got, want := result.Updated, 3; got != want {
+		t.Fatalf("Updated = %d, want %d", got, want)
+	}
+	if got, want := result.Deleted, 1; got != want {
+		t.Fatalf("Deleted = %d, want %d", got, want)
+	}
+	if got := result.Created; got != 0 {
+		t.Fatalf("Created = %d, want 0", got)
+	}
+
+	if got, want := len(client.edited), 3; got != want {
+		t.Fatalf("len(edited) = %d, want %d", got, want)
+	}
+
+	editedByName := make(map[string]porkbun.Record, len(client.edited))
+	for _, record := range client.edited {
+		editedByName[record.Name] = record
+	}
+
+	if _, ok := editedByName[""]; !ok {
+		t.Fatal("expected apex record update")
+	}
+	if _, ok := editedByName["*"]; !ok {
+		t.Fatal("expected wildcard record update")
+	}
+	if got, want := client.deleted[0], "4"; got != want {
+		t.Fatalf("deleted[0] = %q, want %q", got, want)
+	}
+	if got := len(client.created); got != 0 {
+		t.Fatalf("len(created) = %d, want 0", got)
 	}
 }

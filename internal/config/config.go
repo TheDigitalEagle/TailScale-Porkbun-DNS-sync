@@ -13,29 +13,33 @@ const (
 	defaultRecordType   = "A"
 	defaultSubdomain    = "int"
 	defaultTTL          = 600
+	defaultPublicIPURL  = "https://api.ipify.org"
 )
 
 type Config struct {
-	APIKey          string
-	SecretAPIKey    string
-	Domain          string
-	SubdomainSuffix string
-	TTL             int
-	DryRun          bool
-	BaseURL         string
-	TailscaleBinary string
-	RecordType      string
+	APIKey            string
+	SecretAPIKey      string
+	Domain            string
+	SubdomainSuffix   string
+	TTL               int
+	DryRun            bool
+	BaseURL           string
+	TailscaleBinary   string
+	RecordType        string
+	PublicIPEnabled   bool
+	PublicIPLookupURL string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		APIKey:          strings.TrimSpace(os.Getenv("PORKBUN_API_KEY")),
-		SecretAPIKey:    strings.TrimSpace(os.Getenv("PORKBUN_SECRET_API_KEY")),
-		Domain:          normalizeDomain(os.Getenv("PORKBUN_DOMAIN")),
-		SubdomainSuffix: normalizeLabel(os.Getenv("PORKBUN_SUBDOMAIN_SUFFIX")),
-		BaseURL:         strings.TrimSpace(os.Getenv("PORKBUN_BASE_URL")),
-		TailscaleBinary: strings.TrimSpace(os.Getenv("TAILSCALE_BIN")),
-		RecordType:      defaultRecordType,
+		APIKey:            strings.TrimSpace(os.Getenv("PORKBUN_API_KEY")),
+		SecretAPIKey:      strings.TrimSpace(os.Getenv("PORKBUN_SECRET_API_KEY")),
+		Domain:            normalizeDomain(os.Getenv("PORKBUN_DOMAIN")),
+		SubdomainSuffix:   normalizeLabel(os.Getenv("PORKBUN_SUBDOMAIN_SUFFIX")),
+		BaseURL:           strings.TrimSpace(os.Getenv("PORKBUN_BASE_URL")),
+		TailscaleBinary:   strings.TrimSpace(os.Getenv("TAILSCALE_BIN")),
+		RecordType:        defaultRecordType,
+		PublicIPLookupURL: strings.TrimSpace(os.Getenv("PUBLIC_IP_LOOKUP_URL")),
 	}
 
 	if cfg.SubdomainSuffix == "" {
@@ -46,6 +50,9 @@ func Load() (Config, error) {
 	}
 	if cfg.TailscaleBinary == "" {
 		cfg.TailscaleBinary = defaultTailscaleBin
+	}
+	if cfg.PublicIPLookupURL == "" {
+		cfg.PublicIPLookupURL = defaultPublicIPURL
 	}
 
 	ttl, err := intFromEnv("PORKBUN_TTL", defaultTTL)
@@ -60,6 +67,12 @@ func Load() (Config, error) {
 	}
 	cfg.DryRun = dryRun
 
+	publicIPEnabled, err := boolFromEnv("PUBLIC_IP_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PublicIPEnabled = publicIPEnabled
+
 	switch {
 	case cfg.APIKey == "":
 		return Config{}, fmt.Errorf("PORKBUN_API_KEY is required")
@@ -69,6 +82,8 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("PORKBUN_DOMAIN is required")
 	case cfg.SubdomainSuffix == "":
 		return Config{}, fmt.Errorf("PORKBUN_SUBDOMAIN_SUFFIX is required")
+	case cfg.PublicIPEnabled && cfg.PublicIPLookupURL == "":
+		return Config{}, fmt.Errorf("PUBLIC_IP_LOOKUP_URL is required when PUBLIC_IP_ENABLED is true")
 	}
 
 	return cfg, nil

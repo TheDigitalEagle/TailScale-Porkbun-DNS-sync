@@ -17,3 +17,4 @@ All notable changes to this project will be documented in this file.
 
 - Preferred Tailscale `DNSName` labels over raw `HostName` values for DNS record naming.
 - Updated project-facing naming to `TailScale Porkbun DNS Sync`.
+- Added support for syncing advertised Tailscale Services from `CapMap["service-host"]`.

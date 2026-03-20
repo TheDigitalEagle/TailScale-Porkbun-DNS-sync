@@ -11,6 +11,7 @@ import (
 
 	"porkbun-dns/internal/config"
 	"porkbun-dns/internal/porkbun"
+	"porkbun-dns/internal/publicip"
 	"porkbun-dns/internal/syncer"
 	"porkbun-dns/internal/tailscale"
 )
@@ -26,7 +27,11 @@ func main() {
 
 	ts := tailscale.NewCLI(cfg.TailscaleBinary)
 	client := porkbun.NewClient(cfg.APIKey, cfg.SecretAPIKey, cfg.BaseURL)
-	svc := syncer.New(ts, client, cfg)
+	var publicIPv4 syncer.PublicIPSource
+	if cfg.PublicIPEnabled {
+		publicIPv4 = publicip.NewChecker(cfg.PublicIPLookupURL)
+	}
+	svc := syncer.New(ts, publicIPv4, client, cfg)
 
 	result, err := svc.Run(ctx)
 	if err != nil {
