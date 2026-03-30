@@ -33,7 +33,7 @@ func main() {
 			ListenAddr:   cfg.APIListenAddr,
 			Domain:       cfg.Domain,
 			SyncInterval: cfg.SyncInterval,
-		}, svc, client)
+		}, svc, svc, client)
 
 		if err := server.Run(ctx); err != nil {
 			log.Fatalf("api failed: %v", err)

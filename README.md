@@ -11,7 +11,7 @@
 
 TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`. It can also optionally act as dynamic DNS by checking your public IPv4 address each run and syncing the zone apex plus wildcard record, and it can manage selected public `AAAA` records from the current public IPv6 address.
 
-It now also has an opt-in HTTP API layer for the first control-plane phase. That API can expose health, public-record inventory, current sync status, and a manual sync trigger without replacing the existing interval sync behavior.
+It now also has an opt-in HTTP API layer for the first control-plane phases. The API can expose health, normalized public-record inventory, drift status, current sync status, and a manual sync trigger without replacing the existing interval sync behavior.
 
 The repository name is user-facing. The runtime binary remains `porkbun-dns`.
 
@@ -250,12 +250,22 @@ curl http://127.0.0.1:8081/sync/status
 curl -X POST http://127.0.0.1:8081/sync/run
 ```
 
-Current phase-1 endpoints:
+Current API endpoints:
 
+- `GET /records`
 - `GET /health`
 - `GET /records/public`
 - `GET /sync/status`
 - `POST /sync/run`
+
+Phase 2 normalizes the public record inventory into one control-plane shape. Record responses now distinguish:
+
+- desired values vs observed values
+- source of truth
+- owner
+- status such as `in_sync`, `drifted`, or `unmanaged`
+
+This keeps the API contract from being a thin Porkbun passthrough and sets up the later Pi-hole and Caddy providers.
 
 ### Inspect service status
 

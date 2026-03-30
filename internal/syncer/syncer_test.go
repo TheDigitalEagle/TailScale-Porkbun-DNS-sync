@@ -233,6 +233,50 @@ func TestServiceRunWithPublicIPv6Sync(t *testing.T) {
 	}
 }
 
+func TestDesiredRecords(t *testing.T) {
+	t.Parallel()
+
+	svc := New(
+		fakeTailscale{
+			nodes: []tailscale.Node{
+				{Name: "workstation", IPv4: netip.MustParseAddr("100.64.0.1")},
+			},
+		},
+		fakePublicIP{addr: netip.MustParseAddr("198.51.100.20")},
+		fakePublicIPv6{addr: netip.MustParseAddr("2001:db8::247")},
+		&fakeClient{},
+		config.Config{
+			Domain:                "ima.fish",
+			SubdomainSuffix:       "int",
+			TTL:                   600,
+			PublicIPEnabled:       true,
+			PublicIPv6Enabled:     true,
+			PublicIPv6RecordNames: []string{"pihole.int"},
+		},
+	)
+
+	records, err := svc.DesiredRecords(context.Background())
+	if err != nil {
+		t.Fatalf("DesiredRecords() error = %v", err)
+	}
+
+	if got, want := len(records), 4; got != want {
+		t.Fatalf("len(records) = %d, want %d", got, want)
+	}
+	if got, want := records[0].Name, ""; got != want {
+		t.Fatalf("records[0].Name = %q, want %q", got, want)
+	}
+	if got, want := records[0].SourceOfTruth, "public-ip"; got != want {
+		t.Fatalf("records[0].SourceOfTruth = %q, want %q", got, want)
+	}
+	if got, want := records[3].Name, "workstation.int"; got != want {
+		t.Fatalf("records[3].Name = %q, want %q", got, want)
+	}
+	if got, want := records[3].SourceOfTruth, "tailscale"; got != want {
+		t.Fatalf("records[3].SourceOfTruth = %q, want %q", got, want)
+	}
+}
+
 type fakePublicIPv6 struct {
 	addr netip.Addr
 }

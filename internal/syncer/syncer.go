@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -48,6 +49,17 @@ type Result struct {
 	Deleted   int `json:"deleted"`
 }
 
+type DesiredRecord struct {
+	Name          string
+	Type          string
+	Values        []string
+	TTL           string
+	Scope         string
+	Owner         string
+	SourceOfTruth string
+	Targets       []string
+}
+
 func New(ts tailscaleSource, publicIP4 PublicIPSource, publicIP6 PublicIPv6Source, client dnsClient, cfg config.Config) *Service {
 	return &Service{
 		tailscale: ts,
@@ -60,29 +72,14 @@ func New(ts tailscaleSource, publicIP4 PublicIPSource, publicIP6 PublicIPv6Sourc
 
 func (s *Service) Run(ctx context.Context) (Result, error) {
 	result := Result{}
-	desiredA := make(map[string]netip.Addr)
-
-	nodes, err := s.tailscale.Status(ctx)
+	desiredA, desiredAAAA, err := s.desiredState(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	for _, node := range nodes {
-		desiredA[recordName(node.Name, s.cfg.SubdomainSuffix)] = node.IPv4
-	}
 
 	managedNamesA := make(map[string]struct{}, 2)
-	if s.cfg.PublicIPEnabled {
-		if s.publicIP4 == nil {
-			return Result{}, fmt.Errorf("public IP sync enabled without a public IP source")
-		}
-
-		addr, err := s.publicIP4.IPv4(ctx)
-		if err != nil {
-			return Result{}, fmt.Errorf("lookup public IPv4: %w", err)
-		}
-
-		for _, name := range []string{"", "*"} {
-			desiredA[name] = addr
+	for name := range desiredA {
+		if name == "" || name == "*" {
 			managedNamesA[name] = struct{}{}
 		}
 	}
@@ -93,23 +90,11 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	result = combineResults(result, aResult)
 
-	if s.cfg.PublicIPv6Enabled {
-		if s.publicIP6 == nil {
-			return Result{}, fmt.Errorf("public IPv6 sync enabled without a public IPv6 source")
-		}
-
-		addr, err := s.publicIP6.IPv6(ctx)
-		if err != nil {
-			return Result{}, fmt.Errorf("lookup public IPv6: %w", err)
-		}
-
-		desiredAAAA := make(map[string]netip.Addr, len(s.cfg.PublicIPv6RecordNames))
-		managedNamesAAAA := make(map[string]struct{}, len(s.cfg.PublicIPv6RecordNames))
-		for _, name := range s.cfg.PublicIPv6RecordNames {
-			desiredAAAA[name] = addr
+	if len(desiredAAAA) > 0 {
+		managedNamesAAAA := make(map[string]struct{}, len(desiredAAAA))
+		for name := range desiredAAAA {
 			managedNamesAAAA[name] = struct{}{}
 		}
-
 		aaaaResult, err := s.reconcileType(ctx, desiredAAAA, "AAAA", managedNamesAAAA)
 		if err != nil {
 			return Result{}, err
@@ -118,6 +103,96 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func (s *Service) DesiredRecords(ctx context.Context) ([]DesiredRecord, error) {
+	desiredA, desiredAAAA, err := s.desiredState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([]DesiredRecord, 0, len(desiredA)+len(desiredAAAA))
+	for name, ip := range desiredA {
+		record := DesiredRecord{
+			Name:          name,
+			Type:          "A",
+			Values:        []string{ip.String()},
+			TTL:           strconv.Itoa(s.cfg.TTL),
+			Scope:         "public",
+			Owner:         ownerForRecord(name),
+			SourceOfTruth: sourceOfTruthForRecord(name),
+			Targets:       []string{"porkbun"},
+		}
+		records = append(records, record)
+	}
+
+	for name, ip := range desiredAAAA {
+		record := DesiredRecord{
+			Name:          name,
+			Type:          "AAAA",
+			Values:        []string{ip.String()},
+			TTL:           strconv.Itoa(s.cfg.TTL),
+			Scope:         "public",
+			Owner:         "derived",
+			SourceOfTruth: "porkbun-dns",
+			Targets:       []string{"porkbun"},
+		}
+		records = append(records, record)
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].Name == records[j].Name {
+			return records[i].Type < records[j].Type
+		}
+		return records[i].Name < records[j].Name
+	})
+
+	return records, nil
+}
+
+func (s *Service) desiredState(ctx context.Context) (map[string]netip.Addr, map[string]netip.Addr, error) {
+	desiredA := make(map[string]netip.Addr)
+
+	nodes, err := s.tailscale.Status(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, node := range nodes {
+		desiredA[recordName(node.Name, s.cfg.SubdomainSuffix)] = node.IPv4
+	}
+
+	if s.cfg.PublicIPEnabled {
+		if s.publicIP4 == nil {
+			return nil, nil, fmt.Errorf("public IP sync enabled without a public IP source")
+		}
+
+		addr, err := s.publicIP4.IPv4(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("lookup public IPv4: %w", err)
+		}
+
+		for _, name := range []string{"", "*"} {
+			desiredA[name] = addr
+		}
+	}
+
+	desiredAAAA := make(map[string]netip.Addr)
+	if s.cfg.PublicIPv6Enabled {
+		if s.publicIP6 == nil {
+			return nil, nil, fmt.Errorf("public IPv6 sync enabled without a public IPv6 source")
+		}
+
+		addr, err := s.publicIP6.IPv6(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("lookup public IPv6: %w", err)
+		}
+
+		for _, name := range s.cfg.PublicIPv6RecordNames {
+			desiredAAAA[name] = addr
+		}
+	}
+
+	return desiredA, desiredAAAA, nil
 }
 
 func (s *Service) reconcileType(ctx context.Context, desired map[string]netip.Addr, recordType string, managedNames map[string]struct{}) (Result, error) {
@@ -281,4 +356,17 @@ func displayName(name string) string {
 		return "@"
 	}
 	return name
+}
+
+func ownerForRecord(name string) string {
+	return "derived"
+}
+
+func sourceOfTruthForRecord(name string) string {
+	switch name {
+	case "", "*":
+		return "public-ip"
+	default:
+		return "tailscale"
+	}
 }
