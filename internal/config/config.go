@@ -18,6 +18,7 @@ const (
 	defaultPublicIPURL   = "https://api.ipify.org"
 	defaultPublicIPv6URL = "https://api6.ipify.org"
 	defaultAPIListenAddr = ":8080"
+	defaultPiHoleAPIURL  = "http://192.168.2.2:8008/api"
 )
 
 type Config struct {
@@ -39,6 +40,9 @@ type Config struct {
 	APIEnabled            bool
 	APIListenAddr         string
 	SyncInterval          time.Duration
+	PiHoleEnabled         bool
+	PiHoleAPIURL          string
+	PiHolePassword        string
 }
 
 func Load() (Config, error) {
@@ -53,6 +57,8 @@ func Load() (Config, error) {
 		PublicIPLookupURL:   strings.TrimSpace(os.Getenv("PUBLIC_IP_LOOKUP_URL")),
 		PublicIPv6LookupURL: strings.TrimSpace(os.Getenv("PUBLIC_IPV6_LOOKUP_URL")),
 		APIListenAddr:       strings.TrimSpace(os.Getenv("API_LISTEN_ADDR")),
+		PiHoleAPIURL:        strings.TrimSpace(os.Getenv("PIHOLE_API_URL")),
+		PiHolePassword:      strings.TrimSpace(os.Getenv("PIHOLE_PASSWORD")),
 	}
 
 	if cfg.SubdomainSuffix == "" {
@@ -72,6 +78,9 @@ func Load() (Config, error) {
 	}
 	if cfg.APIListenAddr == "" {
 		cfg.APIListenAddr = defaultAPIListenAddr
+	}
+	if cfg.PiHoleAPIURL == "" {
+		cfg.PiHoleAPIURL = defaultPiHoleAPIURL
 	}
 
 	ttl, err := intFromEnv("PORKBUN_TTL", defaultTTL)
@@ -105,6 +114,12 @@ func Load() (Config, error) {
 	}
 	cfg.APIEnabled = apiEnabled
 
+	piHoleEnabled, err := boolFromEnv("PIHOLE_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PiHoleEnabled = piHoleEnabled
+
 	syncInterval, err := secondsDurationFromEnv("SYNC_INTERVAL")
 	if err != nil {
 		return Config{}, err
@@ -134,6 +149,10 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("PUBLIC_IPV6_LOOKUP_URL is required when PUBLIC_IPV6_ENABLED is true")
 	case cfg.PublicIPv6Enabled && len(cfg.PublicIPv6RecordNames) == 0:
 		return Config{}, fmt.Errorf("PUBLIC_IPV6_RECORD_NAMES is required when PUBLIC_IPV6_ENABLED is true")
+	case cfg.PiHoleEnabled && cfg.PiHoleAPIURL == "":
+		return Config{}, fmt.Errorf("PIHOLE_API_URL is required when PIHOLE_ENABLED is true")
+	case cfg.PiHoleEnabled && cfg.PiHolePassword == "":
+		return Config{}, fmt.Errorf("PIHOLE_PASSWORD is required when PIHOLE_ENABLED is true")
 	}
 
 	return cfg, nil

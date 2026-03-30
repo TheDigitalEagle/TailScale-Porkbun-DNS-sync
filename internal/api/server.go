@@ -29,6 +29,10 @@ type desiredRecordSource interface {
 	DesiredRecords(context.Context) ([]syncer.DesiredRecord, error)
 }
 
+type localRecordSource interface {
+	LocalRecords(context.Context) ([]model.Record, error)
+}
+
 type Config struct {
 	ListenAddr   string
 	Domain       string
@@ -40,6 +44,7 @@ type Server struct {
 	runner  syncRunner
 	desired desiredRecordSource
 	lister  publicRecordLister
+	local   localRecordSource
 
 	mu     sync.Mutex
 	status SyncStatus
@@ -55,12 +60,13 @@ type SyncStatus struct {
 	LastResult     *syncer.Result `json:"last_result,omitempty"`
 }
 
-func NewServer(cfg Config, runner syncRunner, desired desiredRecordSource, lister publicRecordLister) *Server {
+func NewServer(cfg Config, runner syncRunner, desired desiredRecordSource, lister publicRecordLister, local localRecordSource) *Server {
 	return &Server{
 		cfg:     cfg,
 		runner:  runner,
 		desired: desired,
 		lister:  lister,
+		local:   local,
 		status:  SyncStatus{},
 	}
 }
@@ -98,6 +104,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /records", s.handleRecords)
+	mux.HandleFunc("GET /records/local", s.handleLocalRecords)
 	mux.HandleFunc("GET /sync/status", s.handleSyncStatus)
 	mux.HandleFunc("POST /sync/run", s.handleSyncRun)
 	mux.HandleFunc("GET /records/public", s.handlePublicRecords)
@@ -146,12 +153,24 @@ func (s *Server) handlePublicRecords(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"domain":  s.cfg.Domain,
-		"records": groupPublicRecords(records, s.cfg.Domain),
+		"records": records,
 	})
 }
 
 func (s *Server) handleRecords(w http.ResponseWriter, r *http.Request) {
-	records, err := s.publicRecords(r.Context())
+	records, err := s.allRecords(r.Context())
+	if err != nil {
+		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"records": records,
+	})
+}
+
+func (s *Server) handleLocalRecords(w http.ResponseWriter, r *http.Request) {
+	records, err := s.localRecords(r.Context())
 	if err != nil {
 		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -246,8 +265,37 @@ func (s *Server) publicRecords(ctx context.Context) ([]model.Record, error) {
 	return buildRecordInventory(desiredRecords, observedRecords, s.cfg.Domain), nil
 }
 
-func groupPublicRecords(records []model.Record, _ string) []model.Record {
-	return records
+func (s *Server) localRecords(ctx context.Context) ([]model.Record, error) {
+	if s.local == nil {
+		return []model.Record{}, nil
+	}
+
+	return s.local.LocalRecords(ctx)
+}
+
+func (s *Server) allRecords(ctx context.Context) ([]model.Record, error) {
+	publicRecords, err := s.publicRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	localRecords, err := s.localRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	records := append(publicRecords, localRecords...)
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].FQDN == records[j].FQDN {
+			if records[i].Type == records[j].Type {
+				return records[i].Scope < records[j].Scope
+			}
+			return records[i].Type < records[j].Type
+		}
+		return records[i].FQDN < records[j].FQDN
+	})
+
+	return records, nil
 }
 
 func buildRecordInventory(desired []syncer.DesiredRecord, observed []porkbun.Record, domain string) []model.Record {

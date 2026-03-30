@@ -13,6 +13,8 @@ TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tails
 
 It now also has an opt-in HTTP API layer for the first control-plane phases. The API can expose health, normalized public-record inventory, drift status, current sync status, and a manual sync trigger without replacing the existing interval sync behavior.
 
+It can also optionally read local DNS inventory from Pi-hole, using the Pi-hole v6 API as another provider behind the same record model.
+
 The repository name is user-facing. The runtime binary remains `porkbun-dns`.
 
 ## Why This Exists
@@ -95,8 +97,10 @@ If `SYNC_INTERVAL` is blank, the container performs one sync and exits.
 cmd/porkbun-dns/          main program
 internal/api/             HTTP API and runtime status
 internal/config/          env loading and validation
+internal/model/           normalized control-plane record model
 internal/tailscale/       tailscale status parsing
 internal/porkbun/         Porkbun API client
+internal/providers/       provider integrations such as Pi-hole
 internal/syncer/          reconciliation logic
 docker/                   container startup scripts
 compose.yaml              local deployment definition
@@ -163,6 +167,9 @@ docker exec tailscale-porkbun-dns-sync \
 | `API_LISTEN_ADDR` | `:8080` | Container listen address for the HTTP API |
 | `API_BIND_ADDRESS` | `127.0.0.1` | Host bind address for the published API port in Docker Compose |
 | `API_PORT` | `8081` | Host port for the published API in Docker Compose |
+| `PIHOLE_ENABLED` | `false` | Enable Pi-hole local-record inventory in the API |
+| `PIHOLE_API_URL` | `http://192.168.2.2:8008/api` | Pi-hole API base URL |
+| `PIHOLE_PASSWORD` | `` | Pi-hole API password used to create a session for local-record reads |
 | `SYNC_INTERVAL` | `3600` | Sync loop interval in seconds |
 | `TS_HOSTNAME` | `tailscale-porkbun-dns-sync` | Tailnet hostname for this container |
 | `TS_TUN_MODE` | `userspace-networking` | Tailscale container networking mode |
@@ -254,6 +261,7 @@ Current API endpoints:
 
 - `GET /records`
 - `GET /health`
+- `GET /records/local`
 - `GET /records/public`
 - `GET /sync/status`
 - `POST /sync/run`
@@ -266,6 +274,11 @@ Phase 2 normalizes the public record inventory into one control-plane shape. Rec
 - status such as `in_sync`, `drifted`, or `unmanaged`
 
 This keeps the API contract from being a thin Porkbun passthrough and sets up the later Pi-hole and Caddy providers.
+
+When `PIHOLE_ENABLED=true`, `GET /records` returns both:
+
+- `scope=public` inventory derived from Porkbun plus the desired-state sync engine
+- `scope=local` inventory read from Pi-hole `config.dns.hosts` and `config.dns.cnameRecords`
 
 ### Inspect service status
 

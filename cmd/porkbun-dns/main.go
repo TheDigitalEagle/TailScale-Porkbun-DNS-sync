@@ -13,6 +13,7 @@ import (
 	"porkbun-dns/internal/api"
 	"porkbun-dns/internal/config"
 	"porkbun-dns/internal/porkbun"
+	piholeprovider "porkbun-dns/internal/providers/pihole"
 	"porkbun-dns/internal/publicip"
 	"porkbun-dns/internal/syncer"
 	"porkbun-dns/internal/tailscale"
@@ -27,13 +28,13 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	svc, client := buildService(cfg)
+	svc, client, piHoleClient := buildService(cfg)
 	if cfg.APIEnabled {
 		server := api.NewServer(api.Config{
 			ListenAddr:   cfg.APIListenAddr,
 			Domain:       cfg.Domain,
 			SyncInterval: cfg.SyncInterval,
-		}, svc, svc, client)
+		}, svc, svc, client, piHoleClient)
 
 		if err := server.Run(ctx); err != nil {
 			log.Fatalf("api failed: %v", err)
@@ -59,7 +60,7 @@ func main() {
 	)
 }
 
-func buildService(cfg config.Config) (*syncer.Service, *porkbun.Client) {
+func buildService(cfg config.Config) (*syncer.Service, *porkbun.Client, *piholeprovider.Client) {
 	ts := tailscale.NewCLI(cfg.TailscaleBinary)
 	client := porkbun.NewClient(cfg.APIKey, cfg.SecretAPIKey, cfg.BaseURL)
 
@@ -77,7 +78,12 @@ func buildService(cfg config.Config) (*syncer.Service, *porkbun.Client) {
 		}
 	}
 
-	return syncer.New(ts, publicIPv4, publicIPv6, client, cfg), client
+	var piHoleClient *piholeprovider.Client
+	if cfg.PiHoleEnabled {
+		piHoleClient = piholeprovider.NewClient(cfg.PiHoleAPIURL, cfg.PiHolePassword)
+	}
+
+	return syncer.New(ts, publicIPv4, publicIPv6, client, cfg), client, piHoleClient
 }
 
 type staticIPv6Source struct {
