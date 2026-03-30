@@ -53,6 +53,10 @@ run_sync() {
   /usr/local/bin/porkbun-dns "$@"
 }
 
+if [ "${API_ENABLED:-false}" = "true" ]; then
+  exec /usr/local/bin/porkbun-dns "$@"
+fi
+
 if [ -n "${SYNC_INTERVAL}" ]; then
   while true; do
     run_sync "$@"

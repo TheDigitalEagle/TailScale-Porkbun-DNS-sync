@@ -6,47 +6,53 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
-	defaultBaseURL      = "https://api.porkbun.com/api/json/v3"
-	defaultTailscaleBin = "tailscale"
-	defaultRecordType   = "A"
-	defaultSubdomain    = "int"
-	defaultTTL          = 600
-	defaultPublicIPURL  = "https://api.ipify.org"
+	defaultBaseURL       = "https://api.porkbun.com/api/json/v3"
+	defaultTailscaleBin  = "tailscale"
+	defaultRecordType    = "A"
+	defaultSubdomain     = "int"
+	defaultTTL           = 600
+	defaultPublicIPURL   = "https://api.ipify.org"
 	defaultPublicIPv6URL = "https://api6.ipify.org"
+	defaultAPIListenAddr = ":8080"
 )
 
 type Config struct {
-	APIKey            string
-	SecretAPIKey      string
-	Domain            string
-	SubdomainSuffix   string
-	TTL               int
-	DryRun            bool
-	BaseURL           string
-	TailscaleBinary   string
-	RecordType        string
-	PublicIPEnabled   bool
-	PublicIPLookupURL string
-	PublicIPv6Enabled bool
-	PublicIPv6LookupURL string
+	APIKey                string
+	SecretAPIKey          string
+	Domain                string
+	SubdomainSuffix       string
+	TTL                   int
+	DryRun                bool
+	BaseURL               string
+	TailscaleBinary       string
+	RecordType            string
+	PublicIPEnabled       bool
+	PublicIPLookupURL     string
+	PublicIPv6Enabled     bool
+	PublicIPv6LookupURL   string
 	PublicIPv6RecordNames []string
-	PublicIPv6Address netip.Addr
+	PublicIPv6Address     netip.Addr
+	APIEnabled            bool
+	APIListenAddr         string
+	SyncInterval          time.Duration
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		APIKey:            strings.TrimSpace(os.Getenv("PORKBUN_API_KEY")),
-		SecretAPIKey:      strings.TrimSpace(os.Getenv("PORKBUN_SECRET_API_KEY")),
-		Domain:            normalizeDomain(os.Getenv("PORKBUN_DOMAIN")),
-		SubdomainSuffix:   normalizeLabel(os.Getenv("PORKBUN_SUBDOMAIN_SUFFIX")),
-		BaseURL:           strings.TrimSpace(os.Getenv("PORKBUN_BASE_URL")),
-		TailscaleBinary:   strings.TrimSpace(os.Getenv("TAILSCALE_BIN")),
-		RecordType:        defaultRecordType,
-		PublicIPLookupURL: strings.TrimSpace(os.Getenv("PUBLIC_IP_LOOKUP_URL")),
+		APIKey:              strings.TrimSpace(os.Getenv("PORKBUN_API_KEY")),
+		SecretAPIKey:        strings.TrimSpace(os.Getenv("PORKBUN_SECRET_API_KEY")),
+		Domain:              normalizeDomain(os.Getenv("PORKBUN_DOMAIN")),
+		SubdomainSuffix:     normalizeLabel(os.Getenv("PORKBUN_SUBDOMAIN_SUFFIX")),
+		BaseURL:             strings.TrimSpace(os.Getenv("PORKBUN_BASE_URL")),
+		TailscaleBinary:     strings.TrimSpace(os.Getenv("TAILSCALE_BIN")),
+		RecordType:          defaultRecordType,
+		PublicIPLookupURL:   strings.TrimSpace(os.Getenv("PUBLIC_IP_LOOKUP_URL")),
 		PublicIPv6LookupURL: strings.TrimSpace(os.Getenv("PUBLIC_IPV6_LOOKUP_URL")),
+		APIListenAddr:       strings.TrimSpace(os.Getenv("API_LISTEN_ADDR")),
 	}
 
 	if cfg.SubdomainSuffix == "" {
@@ -63,6 +69,9 @@ func Load() (Config, error) {
 	}
 	if cfg.PublicIPv6LookupURL == "" {
 		cfg.PublicIPv6LookupURL = defaultPublicIPv6URL
+	}
+	if cfg.APIListenAddr == "" {
+		cfg.APIListenAddr = defaultAPIListenAddr
 	}
 
 	ttl, err := intFromEnv("PORKBUN_TTL", defaultTTL)
@@ -89,6 +98,19 @@ func Load() (Config, error) {
 	}
 	cfg.PublicIPv6Enabled = publicIPv6Enabled
 	cfg.PublicIPv6RecordNames = parseRecordNames(os.Getenv("PUBLIC_IPV6_RECORD_NAMES"), cfg.Domain)
+
+	apiEnabled, err := boolFromEnv("API_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.APIEnabled = apiEnabled
+
+	syncInterval, err := secondsDurationFromEnv("SYNC_INTERVAL")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SyncInterval = syncInterval
+
 	if rawIPv6 := strings.TrimSpace(os.Getenv("PUBLIC_IPV6_ADDRESS")); rawIPv6 != "" {
 		addr, err := netip.ParseAddr(rawIPv6)
 		if err != nil || !addr.Is6() {
@@ -127,6 +149,20 @@ func intFromEnv(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return value, nil
+}
+
+func secondsDurationFromEnv(key string) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0, nil
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+
+	return time.Duration(value) * time.Second, nil
 }
 
 func boolFromEnv(key string, fallback bool) (bool, error) {

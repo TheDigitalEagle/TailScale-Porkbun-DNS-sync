@@ -11,6 +11,8 @@
 
 TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`. It can also optionally act as dynamic DNS by checking your public IPv4 address each run and syncing the zone apex plus wildcard record, and it can manage selected public `AAAA` records from the current public IPv6 address.
 
+It now also has an opt-in HTTP API layer for the first control-plane phase. That API can expose health, public-record inventory, current sync status, and a manual sync trigger without replacing the existing interval sync behavior.
+
 The repository name is user-facing. The runtime binary remains `porkbun-dns`.
 
 ## Why This Exists
@@ -91,6 +93,7 @@ If `SYNC_INTERVAL` is blank, the container performs one sync and exits.
 
 ```text
 cmd/porkbun-dns/          main program
+internal/api/             HTTP API and runtime status
 internal/config/          env loading and validation
 internal/tailscale/       tailscale status parsing
 internal/porkbun/         Porkbun API client
@@ -156,6 +159,10 @@ docker exec tailscale-porkbun-dns-sync \
 | `PUBLIC_IPV6_LOOKUP_URL` | `https://api6.ipify.org` | HTTP endpoint that returns the current public IPv6 as plain text |
 | `PUBLIC_IPV6_RECORD_NAMES` | `` | Comma-separated relative record names to manage as `AAAA`, for example `pihole.int` |
 | `PUBLIC_IPV6_ADDRESS` | `` | Optional explicit IPv6 address to publish instead of discovering one at runtime |
+| `API_ENABLED` | `false` | Enable the HTTP API and move interval sync ownership into the Go process |
+| `API_LISTEN_ADDR` | `:8080` | Container listen address for the HTTP API |
+| `API_BIND_ADDRESS` | `127.0.0.1` | Host bind address for the published API port in Docker Compose |
+| `API_PORT` | `8081` | Host port for the published API in Docker Compose |
 | `SYNC_INTERVAL` | `3600` | Sync loop interval in seconds |
 | `TS_HOSTNAME` | `tailscale-porkbun-dns-sync` | Tailnet hostname for this container |
 | `TS_TUN_MODE` | `userspace-networking` | Tailscale container networking mode |
@@ -171,6 +178,8 @@ It does three jobs:
 - starts `tailscaled`
 - authenticates or reuses saved Tailscale state
 - runs the Go sync process on an interval
+
+When `API_ENABLED=true`, the container still starts `tailscaled` the same way, but the Go service owns the periodic sync loop and exposes the API on port `8080` inside the container. The included Compose file publishes that as `127.0.0.1:8081` by default.
 
 Tailscale state is persisted in a named Docker volume, so the node does not need to re-authenticate every time the container restarts.
 
@@ -216,6 +225,37 @@ Use `PUBLIC_IPV6_ADDRESS` when the sync container does not have outbound IPv6 co
 ```sh
 docker compose logs -f tailscale-porkbun-dns-sync
 ```
+
+### Enable the API
+
+```sh
+API_ENABLED=true
+API_PORT=8081
+```
+
+Then restart:
+
+```sh
+docker compose up -d --build
+```
+
+### API endpoints
+
+With the defaults above:
+
+```sh
+curl http://127.0.0.1:8081/health
+curl http://127.0.0.1:8081/records/public
+curl http://127.0.0.1:8081/sync/status
+curl -X POST http://127.0.0.1:8081/sync/run
+```
+
+Current phase-1 endpoints:
+
+- `GET /health`
+- `GET /records/public`
+- `GET /sync/status`
+- `POST /sync/run`
 
 ### Inspect service status
 

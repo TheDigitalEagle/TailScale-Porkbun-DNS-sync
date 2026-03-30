@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"porkbun-dns/internal/api"
 	"porkbun-dns/internal/config"
 	"porkbun-dns/internal/porkbun"
 	"porkbun-dns/internal/publicip"
@@ -26,21 +27,19 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	ts := tailscale.NewCLI(cfg.TailscaleBinary)
-	client := porkbun.NewClient(cfg.APIKey, cfg.SecretAPIKey, cfg.BaseURL)
-	var publicIPv4 syncer.PublicIPSource
-	if cfg.PublicIPEnabled {
-		publicIPv4 = publicip.NewChecker(cfg.PublicIPLookupURL)
-	}
-	var publicIPv6 syncer.PublicIPv6Source
-	if cfg.PublicIPv6Enabled {
-		if cfg.PublicIPv6Address.IsValid() {
-			publicIPv6 = staticIPv6Source{addr: cfg.PublicIPv6Address}
-		} else {
-			publicIPv6 = publicip.NewChecker(cfg.PublicIPv6LookupURL)
+	svc, client := buildService(cfg)
+	if cfg.APIEnabled {
+		server := api.NewServer(api.Config{
+			ListenAddr:   cfg.APIListenAddr,
+			Domain:       cfg.Domain,
+			SyncInterval: cfg.SyncInterval,
+		}, svc, client)
+
+		if err := server.Run(ctx); err != nil {
+			log.Fatalf("api failed: %v", err)
 		}
+		return
 	}
-	svc := syncer.New(ts, publicIPv4, publicIPv6, client, cfg)
 
 	result, err := svc.Run(ctx)
 	if err != nil {
@@ -58,6 +57,27 @@ func main() {
 		result.Updated,
 		result.Deleted,
 	)
+}
+
+func buildService(cfg config.Config) (*syncer.Service, *porkbun.Client) {
+	ts := tailscale.NewCLI(cfg.TailscaleBinary)
+	client := porkbun.NewClient(cfg.APIKey, cfg.SecretAPIKey, cfg.BaseURL)
+
+	var publicIPv4 syncer.PublicIPSource
+	if cfg.PublicIPEnabled {
+		publicIPv4 = publicip.NewChecker(cfg.PublicIPLookupURL)
+	}
+
+	var publicIPv6 syncer.PublicIPv6Source
+	if cfg.PublicIPv6Enabled {
+		if cfg.PublicIPv6Address.IsValid() {
+			publicIPv6 = staticIPv6Source{addr: cfg.PublicIPv6Address}
+		} else {
+			publicIPv6 = publicip.NewChecker(cfg.PublicIPv6LookupURL)
+		}
+	}
+
+	return syncer.New(ts, publicIPv4, publicIPv6, client, cfg), client
 }
 
 type staticIPv6Source struct {

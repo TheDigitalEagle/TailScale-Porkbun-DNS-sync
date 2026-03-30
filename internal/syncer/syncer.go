@@ -41,11 +41,11 @@ type Service struct {
 }
 
 type Result struct {
-	Desired   int
-	Unchanged int
-	Created   int
-	Updated   int
-	Deleted   int
+	Desired   int `json:"desired"`
+	Unchanged int `json:"unchanged"`
+	Created   int `json:"created"`
+	Updated   int `json:"updated"`
+	Deleted   int `json:"deleted"`
 }
 
 func New(ts tailscaleSource, publicIP4 PublicIPSource, publicIP6 PublicIPv6Source, client dnsClient, cfg config.Config) *Service {

@@ -16,6 +16,8 @@ services:
       PUBLIC_IPV6_RECORD_NAMES: ${PUBLIC_IPV6_RECORD_NAMES:-}
       PUBLIC_IPV6_ADDRESS: ${PUBLIC_IPV6_ADDRESS:-}
       DRY_RUN: ${DRY_RUN:-false}
+      API_ENABLED: ${API_ENABLED:-false}
+      API_LISTEN_ADDR: ${API_LISTEN_ADDR:-:8080}
       SYNC_INTERVAL: ${SYNC_INTERVAL:-3600}
       TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_HOSTNAME: ${TS_HOSTNAME:-tailscale-porkbun-dns-sync}
@@ -23,6 +25,8 @@ services:
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
       TS_TUN_MODE: ${TS_TUN_MODE:-userspace-networking}
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8081}:8080"
     volumes:
       - tailscale-state:/var/lib/tailscale
     restart: unless-stopped

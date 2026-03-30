@@ -19,4 +19,6 @@ COPY docker/tailscale-local.sh /usr/local/bin/tailscale-local
 
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/tailscale-local
 
+EXPOSE 8080
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
