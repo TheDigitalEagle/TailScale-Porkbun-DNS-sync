@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ const (
 	defaultSubdomain    = "int"
 	defaultTTL          = 600
 	defaultPublicIPURL  = "https://api.ipify.org"
+	defaultPublicIPv6URL = "https://api6.ipify.org"
 )
 
 type Config struct {
@@ -28,6 +30,10 @@ type Config struct {
 	RecordType        string
 	PublicIPEnabled   bool
 	PublicIPLookupURL string
+	PublicIPv6Enabled bool
+	PublicIPv6LookupURL string
+	PublicIPv6RecordNames []string
+	PublicIPv6Address netip.Addr
 }
 
 func Load() (Config, error) {
@@ -40,6 +46,7 @@ func Load() (Config, error) {
 		TailscaleBinary:   strings.TrimSpace(os.Getenv("TAILSCALE_BIN")),
 		RecordType:        defaultRecordType,
 		PublicIPLookupURL: strings.TrimSpace(os.Getenv("PUBLIC_IP_LOOKUP_URL")),
+		PublicIPv6LookupURL: strings.TrimSpace(os.Getenv("PUBLIC_IPV6_LOOKUP_URL")),
 	}
 
 	if cfg.SubdomainSuffix == "" {
@@ -53,6 +60,9 @@ func Load() (Config, error) {
 	}
 	if cfg.PublicIPLookupURL == "" {
 		cfg.PublicIPLookupURL = defaultPublicIPURL
+	}
+	if cfg.PublicIPv6LookupURL == "" {
+		cfg.PublicIPv6LookupURL = defaultPublicIPv6URL
 	}
 
 	ttl, err := intFromEnv("PORKBUN_TTL", defaultTTL)
@@ -73,6 +83,20 @@ func Load() (Config, error) {
 	}
 	cfg.PublicIPEnabled = publicIPEnabled
 
+	publicIPv6Enabled, err := boolFromEnv("PUBLIC_IPV6_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PublicIPv6Enabled = publicIPv6Enabled
+	cfg.PublicIPv6RecordNames = parseRecordNames(os.Getenv("PUBLIC_IPV6_RECORD_NAMES"), cfg.Domain)
+	if rawIPv6 := strings.TrimSpace(os.Getenv("PUBLIC_IPV6_ADDRESS")); rawIPv6 != "" {
+		addr, err := netip.ParseAddr(rawIPv6)
+		if err != nil || !addr.Is6() {
+			return Config{}, fmt.Errorf("PUBLIC_IPV6_ADDRESS must be a valid IPv6 address")
+		}
+		cfg.PublicIPv6Address = addr
+	}
+
 	switch {
 	case cfg.APIKey == "":
 		return Config{}, fmt.Errorf("PORKBUN_API_KEY is required")
@@ -84,6 +108,10 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("PORKBUN_SUBDOMAIN_SUFFIX is required")
 	case cfg.PublicIPEnabled && cfg.PublicIPLookupURL == "":
 		return Config{}, fmt.Errorf("PUBLIC_IP_LOOKUP_URL is required when PUBLIC_IP_ENABLED is true")
+	case cfg.PublicIPv6Enabled && !cfg.PublicIPv6Address.IsValid() && cfg.PublicIPv6LookupURL == "":
+		return Config{}, fmt.Errorf("PUBLIC_IPV6_LOOKUP_URL is required when PUBLIC_IPV6_ENABLED is true")
+	case cfg.PublicIPv6Enabled && len(cfg.PublicIPv6RecordNames) == 0:
+		return Config{}, fmt.Errorf("PUBLIC_IPV6_RECORD_NAMES is required when PUBLIC_IPV6_ENABLED is true")
 	}
 
 	return cfg, nil
@@ -121,4 +149,35 @@ func normalizeDomain(value string) string {
 func normalizeLabel(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
 	return strings.Trim(value, ".")
+}
+
+func parseRecordNames(value, domain string) []string {
+	parts := strings.Split(value, ",")
+	seen := make(map[string]struct{}, len(parts))
+	names := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		name := strings.TrimSpace(strings.ToLower(part))
+		name = strings.Trim(name, ".")
+		if name == "" {
+			continue
+		}
+
+		switch {
+		case name == "@":
+			name = ""
+		case name == domain:
+			name = ""
+		case strings.HasSuffix(name, "."+domain):
+			name = strings.TrimSuffix(name, "."+domain)
+		}
+
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+
+	return names
 }

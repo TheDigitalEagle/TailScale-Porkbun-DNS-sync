@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -31,7 +32,15 @@ func main() {
 	if cfg.PublicIPEnabled {
 		publicIPv4 = publicip.NewChecker(cfg.PublicIPLookupURL)
 	}
-	svc := syncer.New(ts, publicIPv4, client, cfg)
+	var publicIPv6 syncer.PublicIPv6Source
+	if cfg.PublicIPv6Enabled {
+		if cfg.PublicIPv6Address.IsValid() {
+			publicIPv6 = staticIPv6Source{addr: cfg.PublicIPv6Address}
+		} else {
+			publicIPv6 = publicip.NewChecker(cfg.PublicIPv6LookupURL)
+		}
+	}
+	svc := syncer.New(ts, publicIPv4, publicIPv6, client, cfg)
 
 	result, err := svc.Run(ctx)
 	if err != nil {
@@ -49,4 +58,12 @@ func main() {
 		result.Updated,
 		result.Deleted,
 	)
+}
+
+type staticIPv6Source struct {
+	addr netip.Addr
+}
+
+func (s staticIPv6Source) IPv6(context.Context) (netip.Addr, error) {
+	return s.addr, nil
 }

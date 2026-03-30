@@ -21,6 +21,10 @@ type PublicIPSource interface {
 	IPv4(context.Context) (netip.Addr, error)
 }
 
+type PublicIPv6Source interface {
+	IPv6(context.Context) (netip.Addr, error)
+}
+
 type dnsClient interface {
 	ListRecords(context.Context, string) ([]porkbun.Record, error)
 	CreateRecord(context.Context, string, porkbun.Record) error
@@ -30,7 +34,8 @@ type dnsClient interface {
 
 type Service struct {
 	tailscale tailscaleSource
-	publicIP  PublicIPSource
+	publicIP4 PublicIPSource
+	publicIP6 PublicIPv6Source
 	client    dnsClient
 	cfg       config.Config
 }
@@ -43,49 +48,85 @@ type Result struct {
 	Deleted   int
 }
 
-func New(ts tailscaleSource, publicIP PublicIPSource, client dnsClient, cfg config.Config) *Service {
+func New(ts tailscaleSource, publicIP4 PublicIPSource, publicIP6 PublicIPv6Source, client dnsClient, cfg config.Config) *Service {
 	return &Service{
 		tailscale: ts,
-		publicIP:  publicIP,
+		publicIP4: publicIP4,
+		publicIP6: publicIP6,
 		client:    client,
 		cfg:       cfg,
 	}
 }
 
 func (s *Service) Run(ctx context.Context) (Result, error) {
-	desired := make(map[string]netip.Addr)
+	result := Result{}
+	desiredA := make(map[string]netip.Addr)
 
 	nodes, err := s.tailscale.Status(ctx)
 	if err != nil {
 		return Result{}, err
 	}
 	for _, node := range nodes {
-		desired[recordName(node.Name, s.cfg.SubdomainSuffix)] = node.IPv4
+		desiredA[recordName(node.Name, s.cfg.SubdomainSuffix)] = node.IPv4
 	}
 
-	managedNames := make(map[string]struct{}, 2)
+	managedNamesA := make(map[string]struct{}, 2)
 	if s.cfg.PublicIPEnabled {
-		if s.publicIP == nil {
+		if s.publicIP4 == nil {
 			return Result{}, fmt.Errorf("public IP sync enabled without a public IP source")
 		}
 
-		addr, err := s.publicIP.IPv4(ctx)
+		addr, err := s.publicIP4.IPv4(ctx)
 		if err != nil {
 			return Result{}, fmt.Errorf("lookup public IPv4: %w", err)
 		}
 
 		for _, name := range []string{"", "*"} {
-			desired[name] = addr
-			managedNames[name] = struct{}{}
+			desiredA[name] = addr
+			managedNamesA[name] = struct{}{}
 		}
 	}
 
+	aResult, err := s.reconcileType(ctx, desiredA, "A", managedNamesA)
+	if err != nil {
+		return Result{}, err
+	}
+	result = combineResults(result, aResult)
+
+	if s.cfg.PublicIPv6Enabled {
+		if s.publicIP6 == nil {
+			return Result{}, fmt.Errorf("public IPv6 sync enabled without a public IPv6 source")
+		}
+
+		addr, err := s.publicIP6.IPv6(ctx)
+		if err != nil {
+			return Result{}, fmt.Errorf("lookup public IPv6: %w", err)
+		}
+
+		desiredAAAA := make(map[string]netip.Addr, len(s.cfg.PublicIPv6RecordNames))
+		managedNamesAAAA := make(map[string]struct{}, len(s.cfg.PublicIPv6RecordNames))
+		for _, name := range s.cfg.PublicIPv6RecordNames {
+			desiredAAAA[name] = addr
+			managedNamesAAAA[name] = struct{}{}
+		}
+
+		aaaaResult, err := s.reconcileType(ctx, desiredAAAA, "AAAA", managedNamesAAAA)
+		if err != nil {
+			return Result{}, err
+		}
+		result = combineResults(result, aaaaResult)
+	}
+
+	return result, nil
+}
+
+func (s *Service) reconcileType(ctx context.Context, desired map[string]netip.Addr, recordType string, managedNames map[string]struct{}) (Result, error) {
 	records, err := s.client.ListRecords(ctx, s.cfg.Domain)
 	if err != nil {
 		return Result{}, err
 	}
 
-	filtered := filterManagedRecords(records, s.cfg.Domain, s.cfg.SubdomainSuffix, managedNames)
+	filtered := filterManagedRecords(records, recordType, s.cfg.Domain, s.cfg.SubdomainSuffix, managedNames)
 	result := Result{Desired: len(desired)}
 
 	seen := make(map[string]bool, len(filtered))
@@ -108,7 +149,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 			continue
 		}
 
-		if err := s.reconcileExisting(ctx, name, wantIP, existing, &result); err != nil {
+		if err := s.reconcileExisting(ctx, name, recordType, wantIP, existing, &result); err != nil {
 			return Result{}, err
 		}
 	}
@@ -119,7 +160,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		}
 		record := porkbun.Record{
 			Name:    name,
-			Type:    s.cfg.RecordType,
+			Type:    recordType,
 			Content: ip.String(),
 			TTL:     strconv.Itoa(s.cfg.TTL),
 			Prio:    "0",
@@ -139,7 +180,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	return result, nil
 }
 
-func (s *Service) reconcileExisting(ctx context.Context, name string, wantIP netip.Addr, existing []porkbun.Record, result *Result) error {
+func (s *Service) reconcileExisting(ctx context.Context, name, recordType string, wantIP netip.Addr, existing []porkbun.Record, result *Result) error {
 	primary := existing[0]
 	needsUpdate := primary.Content != wantIP.String() || primary.TTL != strconv.Itoa(s.cfg.TTL)
 
@@ -149,7 +190,7 @@ func (s *Service) reconcileExisting(ctx context.Context, name string, wantIP net
 	}
 
 	primary.Name = name
-	primary.Type = s.cfg.RecordType
+	primary.Type = recordType
 	primary.Content = wantIP.String()
 	primary.TTL = strconv.Itoa(s.cfg.TTL)
 	primary.Prio = "0"
@@ -187,10 +228,10 @@ func (s *Service) reconcileExisting(ctx context.Context, name string, wantIP net
 	return nil
 }
 
-func filterManagedRecords(records []porkbun.Record, domain, subdomain string, exact map[string]struct{}) map[string][]porkbun.Record {
+func filterManagedRecords(records []porkbun.Record, recordType, domain, subdomain string, exact map[string]struct{}) map[string][]porkbun.Record {
 	managed := make(map[string][]porkbun.Record)
 	for _, record := range records {
-		if strings.ToUpper(record.Type) != "A" {
+		if strings.ToUpper(record.Type) != strings.ToUpper(recordType) {
 			continue
 		}
 		name := normalizeRecordName(record.Name, domain)
@@ -204,6 +245,16 @@ func filterManagedRecords(records []porkbun.Record, domain, subdomain string, ex
 		managed[name] = append(managed[name], record)
 	}
 	return managed
+}
+
+func combineResults(a, b Result) Result {
+	return Result{
+		Desired:   a.Desired + b.Desired,
+		Unchanged: a.Unchanged + b.Unchanged,
+		Created:   a.Created + b.Created,
+		Updated:   a.Updated + b.Updated,
+		Deleted:   a.Deleted + b.Deleted,
+	}
 }
 
 func normalizeRecordName(name, domain string) string {

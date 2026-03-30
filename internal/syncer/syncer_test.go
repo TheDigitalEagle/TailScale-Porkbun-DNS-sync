@@ -69,7 +69,7 @@ func TestServiceRun(t *testing.T) {
 		{Name: "new-node", IPv4: netip.MustParseAddr("100.64.0.5")},
 	}
 
-	svc := New(fakeTailscale{nodes: nodes}, nil, client, config.Config{
+	svc := New(fakeTailscale{nodes: nodes}, nil, nil, client, config.Config{
 		Domain:          "ima.fish",
 		SubdomainSuffix: "int",
 		TTL:             600,
@@ -128,6 +128,7 @@ func TestServiceRunWithPublicIPSync(t *testing.T) {
 			},
 		},
 		fakePublicIP{addr: netip.MustParseAddr("198.51.100.20")},
+		nil,
 		client,
 		config.Config{
 			Domain:          "ima.fish",
@@ -177,4 +178,65 @@ func TestServiceRunWithPublicIPSync(t *testing.T) {
 	if got := len(client.created); got != 0 {
 		t.Fatalf("len(created) = %d, want 0", got)
 	}
+}
+
+func TestServiceRunWithPublicIPv6Sync(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{
+		records: []porkbun.Record{
+			{ID: "1", Name: "pihole.int", Type: "AAAA", Content: "2001:db8::10", TTL: "600"},
+			{ID: "2", Name: "old.int", Type: "AAAA", Content: "2001:db8::11", TTL: "600"},
+		},
+	}
+
+	svc := New(
+		fakeTailscale{},
+		nil,
+		fakePublicIPv6{addr: netip.MustParseAddr("2001:db8::247")},
+		client,
+		config.Config{
+			Domain:                "ima.fish",
+			SubdomainSuffix:       "int",
+			TTL:                   600,
+			RecordType:            "A",
+			PublicIPv6Enabled:     true,
+			PublicIPv6RecordNames: []string{"pihole.int"},
+		},
+	)
+
+	result, err := svc.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if got, want := result.Desired, 1; got != want {
+		t.Fatalf("Desired = %d, want %d", got, want)
+	}
+	if got, want := result.Updated, 1; got != want {
+		t.Fatalf("Updated = %d, want %d", got, want)
+	}
+	if got, want := result.Deleted, 1; got != want {
+		t.Fatalf("Deleted = %d, want %d", got, want)
+	}
+	if got := result.Created; got != 0 {
+		t.Fatalf("Created = %d, want 0", got)
+	}
+	if got, want := client.edited[0].Type, "AAAA"; got != want {
+		t.Fatalf("edited[0].Type = %q, want %q", got, want)
+	}
+	if got, want := client.edited[0].Content, "2001:db8::247"; got != want {
+		t.Fatalf("edited[0].Content = %q, want %q", got, want)
+	}
+	if got, want := client.deleted[0], "2"; got != want {
+		t.Fatalf("deleted[0] = %q, want %q", got, want)
+	}
+}
+
+type fakePublicIPv6 struct {
+	addr netip.Addr
+}
+
+func (f fakePublicIPv6) IPv6(context.Context) (netip.Addr, error) {
+	return f.addr, nil
 }

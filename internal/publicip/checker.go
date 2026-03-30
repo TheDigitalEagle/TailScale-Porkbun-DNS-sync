@@ -25,6 +25,28 @@ func NewChecker(url string) *Checker {
 }
 
 func (c *Checker) IPv4(ctx context.Context) (netip.Addr, error) {
+	addr, err := c.lookup(ctx)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if !addr.Is4() {
+		return netip.Addr{}, fmt.Errorf("public ip lookup returned non-IPv4 address %q", addr)
+	}
+	return addr, nil
+}
+
+func (c *Checker) IPv6(ctx context.Context) (netip.Addr, error) {
+	addr, err := c.lookup(ctx)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if !addr.Is6() {
+		return netip.Addr{}, fmt.Errorf("public ip lookup returned non-IPv6 address %q", addr)
+	}
+	return addr, nil
+}
+
+func (c *Checker) lookup(ctx context.Context) (netip.Addr, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 	if err != nil {
 		return netip.Addr{}, fmt.Errorf("build request: %w", err)
@@ -49,9 +71,5 @@ func (c *Checker) IPv4(ctx context.Context) (netip.Addr, error) {
 	if err != nil {
 		return netip.Addr{}, fmt.Errorf("parse public ip response: %w", err)
 	}
-	if !addr.Is4() {
-		return netip.Addr{}, fmt.Errorf("public ip lookup returned non-IPv4 address %q", addr)
-	}
-
 	return addr, nil
 }

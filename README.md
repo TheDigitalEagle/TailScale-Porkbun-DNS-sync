@@ -9,7 +9,7 @@
 [![Version](https://img.shields.io/badge/Version-1.0.0-black)](#changelog)
 [![Release](https://img.shields.io/badge/Release-GitHub%20Actions-blue)](#release-process)
 
-TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`. It can also optionally act as dynamic DNS by checking your public IPv4 address each run and syncing the zone apex plus wildcard record.
+TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`. It can also optionally act as dynamic DNS by checking your public IPv4 address each run and syncing the zone apex plus wildcard record, and it can manage selected public `AAAA` records from the current public IPv6 address.
 
 The repository name is user-facing. The runtime binary remains `porkbun-dns`.
 
@@ -40,7 +40,13 @@ For each advertised Tailscale Service with an IPv4 address, the service can also
 
 - `<service>.int.<domain>` -> `<tailscale-service-ip>`
 
-By default it only manages `A` records under the configured subdomain suffix. When public-IP sync is enabled it also manages the apex and wildcard `A` records for the root zone. Everything else in Porkbun is left alone.
+By default it only manages `A` records under the configured subdomain suffix. When public-IP sync is enabled it also manages the apex and wildcard `A` records for the root zone. When public-IPv6 sync is enabled it manages only the explicitly named `AAAA` records you configure. Everything else in Porkbun is left alone.
+
+In this environment, `pihole.int.ima.fish` is the motivating example:
+
+- Caddy serves `https://pihole.int.ima.fish` on `443`
+- This repo manages the public `AAAA pihole.int.ima.fish` record
+- The IPv6 target can be supplied explicitly when the sync container itself does not have working IPv6 egress
 
 The sync prefers the label derived from Tailscale `DNSName`, so records follow MagicDNS-style names such as:
 
@@ -73,9 +79,10 @@ Each run performs the same reconciliation flow:
 3. Extract node names, advertised service names, and IPv4 Tailscale addresses.
 4. Fetch existing Porkbun DNS records.
 5. Optionally fetch the current public IPv4 address for apex and wildcard dynamic DNS.
-6. Create missing records.
-7. Update changed records.
-8. Delete stale records under the managed subdomain and deduplicate apex or wildcard records it owns.
+6. Optionally fetch the current public IPv6 address for explicitly configured `AAAA` records.
+7. Create missing records.
+8. Update changed records.
+9. Delete stale records under the managed subdomain and deduplicate apex, wildcard, or managed `AAAA` records it owns.
 9. Sleep for `SYNC_INTERVAL` seconds and repeat.
 
 If `SYNC_INTERVAL` is blank, the container performs one sync and exits.
@@ -145,6 +152,10 @@ docker exec tailscale-porkbun-dns-sync \
 | `PORKBUN_TTL` | `600` | TTL for managed `A` records |
 | `PUBLIC_IP_ENABLED` | `false` | Also sync apex (`@`) and wildcard (`*`) to the current public IPv4 |
 | `PUBLIC_IP_LOOKUP_URL` | `https://api.ipify.org` | HTTP endpoint that returns the current public IPv4 as plain text |
+| `PUBLIC_IPV6_ENABLED` | `false` | Enable managed public `AAAA` records from the current public IPv6 |
+| `PUBLIC_IPV6_LOOKUP_URL` | `https://api6.ipify.org` | HTTP endpoint that returns the current public IPv6 as plain text |
+| `PUBLIC_IPV6_RECORD_NAMES` | `` | Comma-separated relative record names to manage as `AAAA`, for example `pihole.int` |
+| `PUBLIC_IPV6_ADDRESS` | `` | Optional explicit IPv6 address to publish instead of discovering one at runtime |
 | `SYNC_INTERVAL` | `3600` | Sync loop interval in seconds |
 | `TS_HOSTNAME` | `tailscale-porkbun-dns-sync` | Tailnet hostname for this container |
 | `TS_TUN_MODE` | `userspace-networking` | Tailscale container networking mode |
@@ -189,6 +200,16 @@ Published tags are:
 ```sh
 docker compose up -d
 ```
+
+### Example: publish `AAAA pihole.int.ima.fish`
+
+```sh
+PUBLIC_IPV6_ENABLED=true
+PUBLIC_IPV6_RECORD_NAMES=pihole.int
+PUBLIC_IPV6_ADDRESS=2600:1700:83b1:33b0:8aa2:9eff:fe79:49f0
+```
+
+Use `PUBLIC_IPV6_ADDRESS` when the sync container does not have outbound IPv6 connectivity but you still want to publish a known good IPv6 address.
 
 ### Follow logs
 
