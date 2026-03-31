@@ -7,64 +7,146 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <main class="shell">
-      <section class="hero">
-        <p class="eyebrow">DNS Control Plane</p>
-        <h1>Public, local, and ingress records in one place.</h1>
-        <p class="lede">This first frontend manages desired entries, previews provider changes, and shows drift across Porkbun, Pi-hole, and Caddy.</p>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+
+    <main class="app-shell">
+      <section class="hero panel">
+        <div class="hero-copy">
+          <p class="eyebrow">DNS Control Plane</p>
+          <h1>Operate public, local, and ingress records from one dark console.</h1>
+          <p class="lede">
+            Review drift, edit desired state, preview provider changes, and push updates across Porkbun,
+            Pi-hole, and Caddy without leaving the same control surface.
+          </p>
+        </div>
+
+        <div class="hero-stats">
+          <article class="stat-card">
+            <span class="stat-label">Saved entries</span>
+            <strong id="stat-entries">0</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Inventory records</span>
+            <strong id="stat-records">0</strong>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Drifted records</span>
+            <strong id="stat-drift">0</strong>
+          </article>
+        </div>
       </section>
 
-      <section class="panel grid">
-        <div>
-          <h2>Saved Entries</h2>
-          <div id="entries" class="list"></div>
-        </div>
-        <div>
-          <h2>Inventory</h2>
-          <div id="inventory" class="list"></div>
-        </div>
-      </section>
-
-      <section class="panel form-panel">
-        <div class="form-header">
-          <h2>Entry Editor</h2>
-          <button id="apply-all" class="secondary">Apply Saved Entries</button>
+      <section class="toolbar panel">
+        <div class="toolbar-block">
+          <span class="toolbar-label">Inventory filter</span>
+          <div class="segmented" id="scope-filter">
+            <button class="is-active" data-scope="all">All</button>
+            <button data-scope="public">Public</button>
+            <button data-scope="local">Local</button>
+            <button data-scope="ingress">Ingress</button>
+            <button data-scope="drifted">Drifted</button>
+          </div>
         </div>
 
-        <label>Hostname
-          <input id="name" placeholder="pihole.int.ima.fish">
+        <label class="toolbar-search">
+          <span class="toolbar-label">Search</span>
+          <input id="inventory-search" type="search" placeholder="Find hostnames, targets, or status">
         </label>
-
-        <div class="form-grid">
-          <label>Public A/AAAA/CNAME
-            <textarea id="public" placeholder='[{"type":"AAAA","values":["2600:..."],"ttl":"600"}]'></textarea>
-          </label>
-          <label>Local A/AAAA/CNAME
-            <textarea id="local" placeholder='[{"type":"A","values":["192.168.2.2"]}]'></textarea>
-          </label>
-          <label>HTTP Route
-            <textarea id="http" placeholder='{"enabled":true,"upstream":"192.168.2.2:8008","tls_import":"tls_porkbun","root_redirect_to":"/admin/"}'></textarea>
-          </label>
-        </div>
-
-        <div class="actions">
-          <button id="preview">Preview</button>
-          <button id="save" class="secondary">Save</button>
-          <button id="apply">Apply</button>
-          <button id="delete" class="danger">Delete</button>
-        </div>
       </section>
 
-      <section class="panel">
-        <h2>Change Preview</h2>
-        <div id="changes" class="list"></div>
-      </section>
+      <section class="workspace">
+        <div class="column-stack">
+          <section class="panel list-panel">
+            <div class="section-heading">
+              <div>
+                <p class="kicker">Stored desired state</p>
+                <h2>Saved Entries</h2>
+              </div>
+              <button id="new-entry" class="ghost-button">New entry</button>
+            </div>
+            <div id="entries-empty" class="empty-state hidden">No saved entries yet.</div>
+            <div id="entries" class="card-list"></div>
+          </section>
 
-      <section class="panel">
-        <h2>Sync Status</h2>
-        <pre id="sync-status"></pre>
+          <section class="panel list-panel inventory-panel">
+            <div class="section-heading">
+              <div>
+                <p class="kicker">Observed state</p>
+                <h2>Inventory</h2>
+              </div>
+              <span id="inventory-count" class="pill">0 records</span>
+            </div>
+            <div id="inventory-empty" class="empty-state hidden">No records matched the current filter.</div>
+            <div id="inventory" class="card-list inventory-list"></div>
+          </section>
+        </div>
+
+        <aside class="editor-stack">
+          <section class="panel editor-panel">
+            <div class="section-heading">
+              <div>
+                <p class="kicker">Desired changes</p>
+                <h2>Entry Editor</h2>
+              </div>
+              <button id="apply-all" class="secondary-button">Apply saved entries</button>
+            </div>
+
+            <label class="field">
+              <span>Hostname</span>
+              <input id="name" placeholder="pihole.int.ima.fish" autocapitalize="off" spellcheck="false">
+            </label>
+
+            <div class="field-grid">
+              <label class="field">
+                <span>Public records</span>
+                <textarea id="public" placeholder='[{"type":"AAAA","values":["2600:..."],"ttl":"600"}]'></textarea>
+              </label>
+              <label class="field">
+                <span>Local records</span>
+                <textarea id="local" placeholder='[{"type":"A","values":["192.168.2.2"]}]'></textarea>
+              </label>
+              <label class="field">
+                <span>HTTP route</span>
+                <textarea id="http" placeholder='{"enabled":true,"upstream":"192.168.2.2:8008","tls_import":"tls_porkbun","root_redirect_to":"/admin/"}'></textarea>
+              </label>
+            </div>
+
+            <div class="actions">
+              <button id="preview">Preview</button>
+              <button id="save" class="secondary-button">Save</button>
+              <button id="apply">Apply</button>
+              <button id="delete" class="danger-button">Delete</button>
+            </div>
+
+            <div id="form-error" class="feedback error hidden"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <p class="kicker">Execution plan</p>
+                <h2>Change Preview</h2>
+              </div>
+            </div>
+            <div id="changes-empty" class="empty-state">No pending preview yet.</div>
+            <div id="changes" class="card-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <div>
+                <p class="kicker">System pulse</p>
+                <h2>Sync Status</h2>
+              </div>
+            </div>
+            <pre id="sync-status"></pre>
+          </section>
+        </aside>
       </section>
     </main>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
