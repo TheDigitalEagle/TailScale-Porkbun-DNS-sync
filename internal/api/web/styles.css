@@ -119,6 +119,14 @@ button {
   gap: 1.5rem;
   padding: 1.5rem;
   overflow: hidden;
+  align-items: center;
+}
+
+.hero-copy {
+  display: grid;
+  align-content: center;
+  gap: 0.35rem;
+  max-width: 30rem;
 }
 
 .hero-copy h1 {
@@ -559,9 +567,33 @@ pre {
   }
 
   .hero {
-    grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 0.9fr);
-    align-items: end;
+    grid-template-columns: minmax(21rem, 0.95fr) minmax(24rem, 1.05fr);
+    justify-content: center;
+    align-items: center;
     padding: 1.75rem;
+    column-gap: 1.75rem;
+    row-gap: 1.25rem;
+  }
+
+  .hero-copy {
+    justify-self: stretch;
+    max-width: 32rem;
+  }
+
+  .aquarium-shell {
+    justify-self: stretch;
+    width: 100%;
+    max-width: 40rem;
+    min-height: 18rem;
+  }
+
+  .aquarium {
+    min-height: 18rem;
+  }
+
+  .hero-stats {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .toolbar {
