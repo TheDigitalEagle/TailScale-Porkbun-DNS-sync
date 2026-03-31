@@ -46,7 +46,7 @@ document.querySelector('#save').addEventListener('click', async () => {
     await request(`/entries/${encodeURIComponent(entry.name)}`, { method: 'PUT', body: JSON.stringify(entry) });
     state.selectedName = entry.name;
     showToast(`Saved ${entry.name}.`);
-    await refresh();
+    await refreshEntries();
   });
 });
 
@@ -58,7 +58,7 @@ document.querySelector('#apply').addEventListener('click', async () => {
     renderChanges();
     state.selectedName = entry.name;
     showToast(`Applied ${entry.name}.`);
-    await refresh();
+    await refreshAll();
   });
 });
 
@@ -74,7 +74,7 @@ document.querySelector('#delete').addEventListener('click', async () => {
     clearForm();
     state.selectedName = '';
     showToast(`Deleted ${name}.`);
-    await refresh();
+    await refreshAll();
   });
 });
 
@@ -84,7 +84,7 @@ document.querySelector('#apply-all').addEventListener('click', async () => {
     state.changes = data.changes || [];
     renderChanges();
     showToast(`Applied ${state.changes.length} change${state.changes.length === 1 ? '' : 's'} from saved entries.`);
-    await refresh();
+    await refreshAll();
   });
 });
 
@@ -110,26 +110,32 @@ searchEl.addEventListener('input', () => {
   renderInventory();
 });
 
-async function refresh() {
-  const [entries, inventory, syncStatus] = await Promise.all([
-    request('/entries'),
-    request('/records'),
-    request('/sync/status'),
-  ]);
-
+async function refreshEntries() {
+  const entries = await request('/entries');
   state.entries = entries.entries || [];
-  state.records = inventory.records || [];
-  state.syncStatus = syncStatus;
 
   if (state.selectedName && !state.entries.some((entry) => entry.name === state.selectedName)) {
     state.selectedName = '';
   }
 
-  renderStats();
   renderEntries();
+  renderStats();
+}
+
+async function refreshInventory() {
+  const inventory = await request('/records');
+  state.records = inventory.records || [];
   renderInventory();
-  renderChanges();
+  renderStats();
+}
+
+async function refreshSyncStatus() {
+  state.syncStatus = await request('/sync/status');
   renderSyncStatus();
+}
+
+async function refreshAll() {
+  await Promise.all([refreshEntries(), refreshInventory(), refreshSyncStatus()]);
 }
 
 function renderStats() {
@@ -377,7 +383,25 @@ function escapeHTML(value) {
 }
 
 renderScopeFilter();
-refresh().catch((error) => {
-  showFormError(error.message);
-  statusEl.textContent = error.message;
+boot();
+
+window.addEventListener('focus', () => {
+  refreshInventory().catch(() => {});
+  refreshSyncStatus().catch(() => {});
 });
+
+window.addEventListener('pageshow', () => {
+  refreshInventory().catch(() => {});
+});
+
+window.refreshFishbowl = refreshAll;
+
+async function boot() {
+  const results = await Promise.allSettled([refreshEntries(), refreshInventory(), refreshSyncStatus()]);
+  const rejected = results.find((result) => result.status === 'rejected');
+  if (rejected) {
+    const error = rejected.reason instanceof Error ? rejected.reason : new Error(String(rejected.reason));
+    showFormError(error.message);
+    statusEl.textContent = error.message;
+  }
+}

@@ -65,9 +65,14 @@ type Server struct {
 	ingress ingressRecordSource
 	control controlPlane
 
-	mu     sync.Mutex
-	status SyncStatus
+	mu               sync.Mutex
+	status           SyncStatus
+	recordCache      []model.Record
+	recordCacheAt    time.Time
+	recordCacheError error
 }
+
+const recordCacheTTL = 10 * time.Second
 
 type SyncStatus struct {
 	Running        bool           `json:"running"`
@@ -188,6 +193,7 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.invalidateRecordCache()
 	s.writeJSON(w, http.StatusAccepted, map[string]any{"status": "completed", "result": result})
 }
 
@@ -247,6 +253,7 @@ func (s *Server) handlePutEntry(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.invalidateRecordCache()
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
@@ -261,6 +268,7 @@ func (s *Server) handleDeleteEntry(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found"})
 		return
 	}
+	s.invalidateRecordCache()
 	s.writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "changes": changes})
 }
 
@@ -289,6 +297,7 @@ func (s *Server) handleApplyEntry(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	s.invalidateRecordCache()
 	s.writeJSON(w, http.StatusOK, map[string]any{"status": "applied", "changes": changes})
 }
 
@@ -298,6 +307,7 @@ func (s *Server) handleApplyStored(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	s.invalidateRecordCache()
 	s.writeJSON(w, http.StatusOK, map[string]any{"status": "applied", "changes": changes})
 }
 
@@ -428,18 +438,51 @@ func (s *Server) ingressRecords(ctx context.Context) ([]model.Record, error) {
 }
 
 func (s *Server) allRecords(ctx context.Context) ([]model.Record, error) {
-	publicRecords, err := s.publicRecords(ctx)
-	if err != nil {
-		return nil, err
+	if records, ok, err := s.cachedRecords(); ok {
+		return records, err
 	}
-	localRecords, err := s.localRecords(ctx)
-	if err != nil {
-		return nil, err
+
+	type result struct {
+		records []model.Record
+		err     error
 	}
-	ingressRecords, err := s.ingressRecords(ctx)
-	if err != nil {
-		return nil, err
+
+	publicCh := make(chan result, 1)
+	localCh := make(chan result, 1)
+	ingressCh := make(chan result, 1)
+
+	go func() {
+		records, err := s.publicRecords(ctx)
+		publicCh <- result{records: records, err: err}
+	}()
+	go func() {
+		records, err := s.localRecords(ctx)
+		localCh <- result{records: records, err: err}
+	}()
+	go func() {
+		records, err := s.ingressRecords(ctx)
+		ingressCh <- result{records: records, err: err}
+	}()
+
+	publicResult := <-publicCh
+	if publicResult.err != nil {
+		return nil, publicResult.err
 	}
+
+	localResult := <-localCh
+	if localResult.err != nil {
+		return nil, localResult.err
+	}
+
+	ingressResult := <-ingressCh
+	if ingressResult.err != nil {
+		return nil, ingressResult.err
+	}
+
+	publicRecords := publicResult.records
+	localRecords := localResult.records
+	ingressRecords := ingressResult.records
+
 	records := append(publicRecords, localRecords...)
 	records = append(records, ingressRecords...)
 	sort.Slice(records, func(i, j int) bool {
@@ -451,7 +494,35 @@ func (s *Server) allRecords(ctx context.Context) ([]model.Record, error) {
 		}
 		return records[i].FQDN < records[j].FQDN
 	})
+	s.storeRecordCache(records)
 	return records, nil
+}
+
+func (s *Server) cachedRecords() ([]model.Record, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.recordCacheAt.IsZero() || time.Since(s.recordCacheAt) > recordCacheTTL {
+		return nil, false, nil
+	}
+
+	return append([]model.Record(nil), s.recordCache...), true, s.recordCacheError
+}
+
+func (s *Server) storeRecordCache(records []model.Record) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordCache = append([]model.Record(nil), records...)
+	s.recordCacheAt = time.Now()
+	s.recordCacheError = nil
+}
+
+func (s *Server) invalidateRecordCache() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordCache = nil
+	s.recordCacheAt = time.Time{}
+	s.recordCacheError = nil
 }
 
 func buildRecordInventory(desired []syncer.DesiredRecord, observed []porkbun.Record, domain string) []model.Record {
