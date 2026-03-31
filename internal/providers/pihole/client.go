@@ -59,8 +59,8 @@ type configResponse struct {
 type patchConfigRequest struct {
 	Config struct {
 		DNS struct {
-			Hosts        []string `json:"hosts,omitempty"`
-			CNAMERecords []string `json:"cnameRecords,omitempty"`
+			Hosts        []string `json:"hosts"`
+			CNAMERecords []string `json:"cnameRecords"`
 		} `json:"dns"`
 	} `json:"config"`
 }

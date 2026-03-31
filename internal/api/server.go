@@ -141,16 +141,30 @@ func (s *Server) routes() http.Handler {
 	}
 	fileServer := http.FileServer(http.FS(sub))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			r.URL.Path = "/index.html"
-		}
-		fileServer.ServeHTTP(w, r)
+		s.serveWebAsset(w, "index.html", "text/html; charset=utf-8")
+	})
+	mux.HandleFunc("GET /index.html", func(w http.ResponseWriter, r *http.Request) {
+		s.serveWebAsset(w, "index.html", "text/html; charset=utf-8")
+	})
+	mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
+		s.serveWebAsset(w, "app.js", "text/javascript; charset=utf-8")
+	})
+	mux.HandleFunc("GET /styles.css", func(w http.ResponseWriter, r *http.Request) {
+		s.serveWebAsset(w, "styles.css", "text/css; charset=utf-8")
 	})
 	mux.Handle("GET /assets/", fileServer)
-	mux.Handle("GET /app.js", fileServer)
-	mux.Handle("GET /styles.css", fileServer)
 
 	return mux
+}
+
+func (s *Server) serveWebAsset(w http.ResponseWriter, name, contentType string) {
+	data, err := webFS.ReadFile("web/" + name)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -290,6 +304,10 @@ func (s *Server) handleApplyStored(w http.ResponseWriter, r *http.Request) {
 var errSyncAlreadyRunning = errors.New("sync already running")
 
 func (s *Server) runSchedule(ctx context.Context) {
+	if err := s.waitForStartupReadiness(ctx); err != nil {
+		log.Printf("startup readiness check failed: %v", err)
+	}
+
 	if _, err := s.runSync(ctx, "startup"); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("startup sync failed: %v", err)
 	}
@@ -311,6 +329,37 @@ func (s *Server) runSchedule(ctx context.Context) {
 				}
 				log.Printf("scheduled sync failed: %v", err)
 			}
+		}
+	}
+}
+
+func (s *Server) waitForStartupReadiness(ctx context.Context) error {
+	if s.desired == nil {
+		return nil
+	}
+
+	deadline := time.Now().Add(45 * time.Second)
+	for {
+		records, err := s.desired.DesiredRecords(ctx)
+		if err == nil && hasTailscaleDerivedRecord(records) {
+			return nil
+		}
+
+		if err != nil {
+			log.Printf("startup readiness: desired record probe failed: %v", err)
+		}
+
+		if time.Now().After(deadline) {
+			if err != nil {
+				return err
+			}
+			return errors.New("timeout waiting for tailscale-derived records")
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
 		}
 	}
 }
@@ -512,6 +561,15 @@ func sameStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func hasTailscaleDerivedRecord(records []syncer.DesiredRecord) bool {
+	for _, record := range records {
+		if record.SourceOfTruth == "tailscale" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeRecordName(name, domain string) string {
