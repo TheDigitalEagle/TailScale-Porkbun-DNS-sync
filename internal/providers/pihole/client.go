@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"porkbun-dns/internal/model"
@@ -20,6 +22,8 @@ type Client struct {
 	baseURL    string
 	password   string
 	httpClient *http.Client
+	mu         sync.Mutex
+	sid        string
 }
 
 func NewClient(baseURL, password string) *Client {
@@ -66,12 +70,7 @@ type patchConfigRequest struct {
 }
 
 func (c *Client) LocalRecords(ctx context.Context) ([]model.Record, error) {
-	sid, err := c.authenticate(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg, err := c.config(ctx, sid)
+	cfg, err := c.withConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,12 +93,7 @@ func (c *Client) LocalRecords(ctx context.Context) ([]model.Record, error) {
 }
 
 func (c *Client) UpsertEntry(ctx context.Context, entry model.Entry) error {
-	sid, err := c.authenticate(ctx)
-	if err != nil {
-		return err
-	}
-
-	cfg, err := c.config(ctx, sid)
+	sid, cfg, err := c.authenticatedConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -120,26 +114,51 @@ func (c *Client) UpsertEntry(ctx context.Context, entry model.Entry) error {
 		}
 	}
 
-	return c.patchConfig(ctx, sid, hosts, cnames)
+	if err := c.patchConfig(ctx, sid, hosts, cnames); err != nil {
+		if isAuthError(err) {
+			c.clearSID(sid)
+			sid, err = c.authenticate(ctx)
+			if err != nil {
+				return err
+			}
+			return c.patchConfig(ctx, sid, hosts, cnames)
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Client) DeleteEntry(ctx context.Context, fqdn string) error {
-	sid, err := c.authenticate(ctx)
-	if err != nil {
-		return err
-	}
-
-	cfg, err := c.config(ctx, sid)
+	sid, cfg, err := c.authenticatedConfig(ctx)
 	if err != nil {
 		return err
 	}
 
 	hosts := filterHosts(cfg.Config.DNS.Hosts, fqdn)
 	cnames := filterCNAMEs(cfg.Config.DNS.CNAMERecords, fqdn)
-	return c.patchConfig(ctx, sid, hosts, cnames)
+	if err := c.patchConfig(ctx, sid, hosts, cnames); err != nil {
+		if isAuthError(err) {
+			c.clearSID(sid)
+			sid, err = c.authenticate(ctx)
+			if err != nil {
+				return err
+			}
+			return c.patchConfig(ctx, sid, hosts, cnames)
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Client) authenticate(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	if c.sid != "" {
+		sid := c.sid
+		c.mu.Unlock()
+		return sid, nil
+	}
+	c.mu.Unlock()
+
 	body, err := json.Marshal(authRequest{Password: c.password})
 	if err != nil {
 		return "", fmt.Errorf("marshal auth request: %w", err)
@@ -158,6 +177,9 @@ func (c *Client) authenticate(ctx context.Context) (string, error) {
 	if strings.TrimSpace(response.Session.SID) == "" {
 		return "", fmt.Errorf("authenticate with pihole: missing session id")
 	}
+	c.mu.Lock()
+	c.sid = response.Session.SID
+	c.mu.Unlock()
 	return response.Session.SID, nil
 }
 
@@ -189,7 +211,11 @@ func (c *Client) do(req *http.Request, out any) error {
 	}
 
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("unexpected status %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		return &apiError{
+			statusCode: resp.StatusCode,
+			status:     resp.Status,
+			body:       string(data),
+		}
 	}
 
 	if err := json.Unmarshal(data, out); err != nil {
@@ -221,6 +247,58 @@ func (c *Client) patchConfig(ctx context.Context, sid string, hosts, cnames []st
 		return fmt.Errorf("patch pihole config: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) withConfig(ctx context.Context) (configResponse, error) {
+	_, cfg, err := c.authenticatedConfig(ctx)
+	return cfg, err
+}
+
+func (c *Client) authenticatedConfig(ctx context.Context) (string, configResponse, error) {
+	sid, err := c.authenticate(ctx)
+	if err != nil {
+		return "", configResponse{}, err
+	}
+
+	cfg, err := c.config(ctx, sid)
+	if err != nil && isAuthError(err) {
+		c.clearSID(sid)
+		sid, err = c.authenticate(ctx)
+		if err != nil {
+			return "", configResponse{}, err
+		}
+		cfg, err = c.config(ctx, sid)
+	}
+	if err != nil {
+		return "", configResponse{}, err
+	}
+	return sid, cfg, nil
+}
+
+func (c *Client) clearSID(sid string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sid == sid {
+		c.sid = ""
+	}
+}
+
+type apiError struct {
+	statusCode int
+	status     string
+	body       string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("unexpected status %s: %s", e.status, strings.TrimSpace(e.body))
+}
+
+func isAuthError(err error) bool {
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.statusCode == http.StatusUnauthorized || apiErr.statusCode == http.StatusForbidden
 }
 
 func parseHostRecords(entries []string, localDomain string, domainIsLocal, expandHosts bool) []model.Record {

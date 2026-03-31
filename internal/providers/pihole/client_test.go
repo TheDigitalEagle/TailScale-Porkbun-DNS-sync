@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -53,5 +54,40 @@ func TestNormalizeLocalName(t *testing.T) {
 	}
 	if got, want := fqdn, "router.int.ima.fish"; got != want {
 		t.Fatalf("fqdn = %q, want %q", got, want)
+	}
+}
+
+func TestLocalRecordsReusesSession(t *testing.T) {
+	t.Parallel()
+
+	var authCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth":
+			authCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"session":{"sid":"test-sid"}}`))
+		case "/config":
+			if got, want := r.Header.Get("sid"), "test-sid"; got != want {
+				t.Fatalf("sid header = %q, want %q", got, want)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"config":{"dns":{"hosts":[],"cnameRecords":[],"domain":{"name":"int.ima.fish","local":true},"expandHosts":false}}}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "secret")
+	if _, err := client.LocalRecords(context.Background()); err != nil {
+		t.Fatalf("LocalRecords() first call error = %v", err)
+	}
+	if _, err := client.LocalRecords(context.Background()); err != nil {
+		t.Fatalf("LocalRecords() second call error = %v", err)
+	}
+
+	if got, want := authCalls.Load(), int32(1); got != want {
+		t.Fatalf("auth calls = %d, want %d", got, want)
 	}
 }
