@@ -11,9 +11,10 @@
 
 TailScale Porkbun DNS Sync is a Go service that joins your tailnet, reads `tailscale status --json`, and continuously reconciles Porkbun `A` records for a delegated subdomain like `*.int.ima.fish`. It can also optionally act as dynamic DNS by checking your public IPv4 address each run and syncing the zone apex plus wildcard record, and it can manage selected public `AAAA` records from the current public IPv6 address.
 
-It now also has an opt-in HTTP API layer for the first control-plane phases. The API can expose health, normalized public-record inventory, drift status, current sync status, and a manual sync trigger without replacing the existing interval sync behavior.
+It now also has an opt-in HTTP API layer and built-in frontend for the first full control-plane slice. The API can expose health, normalized inventory, drift status, desired entries, preview/apply changes, and current sync status without replacing the existing interval sync behavior.
 
 It can also optionally read local DNS inventory from Pi-hole, using the Pi-hole v6 API as another provider behind the same record model.
+It can also optionally read and manage Caddy reverse-proxy routes from a mounted Caddyfile while persisting desired entries in a file-backed store.
 
 The repository name is user-facing. The runtime binary remains `porkbun-dns`.
 
@@ -96,11 +97,13 @@ If `SYNC_INTERVAL` is blank, the container performs one sync and exits.
 ```text
 cmd/porkbun-dns/          main program
 internal/api/             HTTP API and runtime status
+internal/control/         desired-state preview/apply logic
 internal/config/          env loading and validation
 internal/model/           normalized control-plane record model
 internal/tailscale/       tailscale status parsing
 internal/porkbun/         Porkbun API client
 internal/providers/       provider integrations such as Pi-hole
+internal/store/           file-backed desired-state persistence
 internal/syncer/          reconciliation logic
 docker/                   container startup scripts
 compose.yaml              local deployment definition
@@ -170,6 +173,11 @@ docker exec tailscale-porkbun-dns-sync \
 | `PIHOLE_ENABLED` | `false` | Enable Pi-hole local-record inventory in the API |
 | `PIHOLE_API_URL` | `http://192.168.2.2:8008/api` | Pi-hole API base URL |
 | `PIHOLE_PASSWORD` | `` | Pi-hole API password used to create a session for local-record reads |
+| `STATE_FILE_PATH` | `/var/lib/porkbun-dns/state.json` | Desired-state file path inside the container |
+| `CADDY_ENABLED` | `false` | Enable Caddy ingress inventory and managed route writes |
+| `CADDYFILE_PATH` | `/config/caddy/Caddyfile` | Mounted Caddyfile path inside the container |
+| `CADDYFILE_HOST_PATH` | `../caddy-ima/Caddyfile` | Host path mounted into the container for Caddy integration |
+| `CADDY_TLS_IMPORT` | `tls_porkbun` | Default Caddy `import` line for managed routes |
 | `SYNC_INTERVAL` | `3600` | Sync loop interval in seconds |
 | `TS_HOSTNAME` | `tailscale-porkbun-dns-sync` | Tailnet hostname for this container |
 | `TS_TUN_MODE` | `userspace-networking` | Tailscale container networking mode |
@@ -186,9 +194,11 @@ It does three jobs:
 - authenticates or reuses saved Tailscale state
 - runs the Go sync process on an interval
 
-When `API_ENABLED=true`, the container still starts `tailscaled` the same way, but the Go service owns the periodic sync loop and exposes the API on port `8080` inside the container. The included Compose file publishes that as `127.0.0.1:8081` by default.
+When `API_ENABLED=true`, the container still starts `tailscaled` the same way, but the Go service owns the periodic sync loop, persists desired entries under `/var/lib/porkbun-dns`, and exposes the API plus frontend on port `8080` inside the container. The included Compose file publishes that as `127.0.0.1:8081` by default.
 
 Tailscale state is persisted in a named Docker volume, so the node does not need to re-authenticate every time the container restarts.
+The control-plane store is persisted in a second named Docker volume.
+If `CADDY_ENABLED=true`, the Compose file also mounts the sibling `../caddy-ima/Caddyfile` into the container by default.
 
 ## Container Images
 
@@ -238,6 +248,7 @@ docker compose logs -f tailscale-porkbun-dns-sync
 ```sh
 API_ENABLED=true
 API_PORT=8081
+STATE_FILE_PATH=/var/lib/porkbun-dns/state.json
 ```
 
 Then restart:
@@ -251,8 +262,12 @@ docker compose up -d --build
 With the defaults above:
 
 ```sh
+curl http://127.0.0.1:8081/
 curl http://127.0.0.1:8081/health
+curl http://127.0.0.1:8081/entries
 curl http://127.0.0.1:8081/records/public
+curl http://127.0.0.1:8081/records/local
+curl http://127.0.0.1:8081/records/ingress
 curl http://127.0.0.1:8081/sync/status
 curl -X POST http://127.0.0.1:8081/sync/run
 ```
@@ -261,7 +276,14 @@ Current API endpoints:
 
 - `GET /records`
 - `GET /health`
+- `GET /entries`
+- `PUT /entries/{name}`
+- `DELETE /entries/{name}`
+- `POST /entries/preview`
+- `POST /entries/apply`
+- `POST /apply`
 - `GET /records/local`
+- `GET /records/ingress`
 - `GET /records/public`
 - `GET /sync/status`
 - `POST /sync/run`
@@ -279,6 +301,26 @@ When `PIHOLE_ENABLED=true`, `GET /records` returns both:
 
 - `scope=public` inventory derived from Porkbun plus the desired-state sync engine
 - `scope=local` inventory read from Pi-hole `config.dns.hosts` and `config.dns.cnameRecords`
+
+When `CADDY_ENABLED=true`, `GET /records` also returns:
+
+- `scope=ingress` inventory from Caddy reverse-proxy blocks as `HTTP_PROXY` records
+
+### Frontend
+
+When the API is enabled, browse to:
+
+```text
+http://127.0.0.1:8081/
+```
+
+The frontend provides:
+
+- saved desired entries
+- live public, local, and ingress inventory
+- change preview for a hostname
+- apply-all for stored entries
+- a simple editor for public records, local records, and HTTP proxy routes
 
 ### Inspect service status
 

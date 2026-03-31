@@ -2,9 +2,10 @@ package api
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"sort"
@@ -16,6 +17,9 @@ import (
 	"porkbun-dns/internal/porkbun"
 	"porkbun-dns/internal/syncer"
 )
+
+//go:embed web/*
+var webFS embed.FS
 
 type syncRunner interface {
 	Run(context.Context) (syncer.Result, error)
@@ -33,6 +37,19 @@ type localRecordSource interface {
 	LocalRecords(context.Context) ([]model.Record, error)
 }
 
+type ingressRecordSource interface {
+	IngressRecords(context.Context) ([]model.Record, error)
+}
+
+type controlPlane interface {
+	Entries(context.Context) ([]model.Entry, error)
+	SaveEntry(context.Context, model.Entry) error
+	PreviewEntry(context.Context, model.Entry) ([]model.Change, error)
+	ApplyEntry(context.Context, model.Entry) ([]model.Change, error)
+	ApplyStored(context.Context) ([]model.Change, error)
+	DeleteEntry(context.Context, string) ([]model.Change, bool, error)
+}
+
 type Config struct {
 	ListenAddr   string
 	Domain       string
@@ -45,6 +62,8 @@ type Server struct {
 	desired desiredRecordSource
 	lister  publicRecordLister
 	local   localRecordSource
+	ingress ingressRecordSource
+	control controlPlane
 
 	mu     sync.Mutex
 	status SyncStatus
@@ -60,13 +79,15 @@ type SyncStatus struct {
 	LastResult     *syncer.Result `json:"last_result,omitempty"`
 }
 
-func NewServer(cfg Config, runner syncRunner, desired desiredRecordSource, lister publicRecordLister, local localRecordSource) *Server {
+func NewServer(cfg Config, runner syncRunner, desired desiredRecordSource, lister publicRecordLister, local localRecordSource, ingress ingressRecordSource, control controlPlane) *Server {
 	return &Server{
 		cfg:     cfg,
 		runner:  runner,
 		desired: desired,
 		lister:  lister,
 		local:   local,
+		ingress: ingress,
+		control: control,
 		status:  SyncStatus{},
 	}
 }
@@ -83,10 +104,8 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-
 		if err := httpServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("api shutdown failed: %v", err)
 		}
@@ -104,25 +123,44 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /records", s.handleRecords)
+	mux.HandleFunc("GET /records/public", s.handlePublicRecords)
 	mux.HandleFunc("GET /records/local", s.handleLocalRecords)
+	mux.HandleFunc("GET /records/ingress", s.handleIngressRecords)
+	mux.HandleFunc("GET /entries", s.handleEntries)
+	mux.HandleFunc("PUT /entries/{name}", s.handlePutEntry)
+	mux.HandleFunc("DELETE /entries/{name}", s.handleDeleteEntry)
+	mux.HandleFunc("POST /entries/preview", s.handlePreviewEntry)
+	mux.HandleFunc("POST /entries/apply", s.handleApplyEntry)
+	mux.HandleFunc("POST /apply", s.handleApplyStored)
 	mux.HandleFunc("GET /sync/status", s.handleSyncStatus)
 	mux.HandleFunc("POST /sync/run", s.handleSyncRun)
-	mux.HandleFunc("GET /records/public", s.handlePublicRecords)
+
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		panic(err)
+	}
+	fileServer := http.FileServer(http.FS(sub))
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			r.URL.Path = "/index.html"
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+	mux.Handle("GET /assets/", fileServer)
+	mux.Handle("GET /app.js", fileServer)
+	mux.Handle("GET /styles.css", fileServer)
+
 	return mux
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"mode":   "api",
-	})
+	s.writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "mode": "api"})
 }
 
 func (s *Server) handleSyncStatus(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	status := s.status
 	s.mu.Unlock()
-
 	s.writeJSON(w, http.StatusOK, status)
 }
 
@@ -133,15 +171,10 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 			s.writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
-
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-
-	s.writeJSON(w, http.StatusAccepted, map[string]any{
-		"status": "completed",
-		"result": result,
-	})
+	s.writeJSON(w, http.StatusAccepted, map[string]any{"status": "completed", "result": result})
 }
 
 func (s *Server) handlePublicRecords(w http.ResponseWriter, r *http.Request) {
@@ -150,23 +183,7 @@ func (s *Server) handlePublicRecords(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"domain":  s.cfg.Domain,
-		"records": records,
-	})
-}
-
-func (s *Server) handleRecords(w http.ResponseWriter, r *http.Request) {
-	records, err := s.allRecords(r.Context())
-	if err != nil {
-		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"records": records,
-	})
+	s.writeJSON(w, http.StatusOK, map[string]any{"domain": s.cfg.Domain, "records": records})
 }
 
 func (s *Server) handleLocalRecords(w http.ResponseWriter, r *http.Request) {
@@ -175,10 +192,99 @@ func (s *Server) handleLocalRecords(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"records": records})
+}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"records": records,
-	})
+func (s *Server) handleIngressRecords(w http.ResponseWriter, r *http.Request) {
+	records, err := s.ingressRecords(r.Context())
+	if err != nil {
+		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"records": records})
+}
+
+func (s *Server) handleRecords(w http.ResponseWriter, r *http.Request) {
+	records, err := s.allRecords(r.Context())
+	if err != nil {
+		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"records": records})
+}
+
+func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) {
+	entries, err := s.control.Entries(r.Context())
+	if err != nil {
+		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+func (s *Server) handlePutEntry(w http.ResponseWriter, r *http.Request) {
+	var entry model.Entry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+		return
+	}
+	entry.Name = strings.Trim(strings.ToLower(r.PathValue("name")), ".")
+	if err := s.control.SaveEntry(r.Context(), entry); err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+func (s *Server) handleDeleteEntry(w http.ResponseWriter, r *http.Request) {
+	name := strings.Trim(strings.ToLower(r.PathValue("name")), ".")
+	changes, ok, err := s.control.DeleteEntry(r.Context(), name)
+	if err != nil {
+		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		s.writeJSON(w, http.StatusNotFound, map[string]string{"error": "entry not found"})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "changes": changes})
+}
+
+func (s *Server) handlePreviewEntry(w http.ResponseWriter, r *http.Request) {
+	var entry model.Entry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+		return
+	}
+	changes, err := s.control.PreviewEntry(r.Context(), entry)
+	if err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"changes": changes})
+}
+
+func (s *Server) handleApplyEntry(w http.ResponseWriter, r *http.Request) {
+	var entry model.Entry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+		return
+	}
+	changes, err := s.control.ApplyEntry(r.Context(), entry)
+	if err != nil {
+		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"status": "applied", "changes": changes})
+}
+
+func (s *Server) handleApplyStored(w http.ResponseWriter, r *http.Request) {
+	changes, err := s.control.ApplyStored(r.Context())
+	if err != nil {
+		s.writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"status": "applied", "changes": changes})
 }
 
 var errSyncAlreadyRunning = errors.New("sync already running")
@@ -190,7 +296,6 @@ func (s *Server) runSchedule(ctx context.Context) {
 
 	ticker := time.NewTicker(s.cfg.SyncInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -216,7 +321,6 @@ func (s *Server) runSync(ctx context.Context, trigger string) (syncer.Result, er
 		s.mu.Unlock()
 		return syncer.Result{}, errSyncAlreadyRunning
 	}
-
 	startedAt := time.Now().UTC()
 	s.status.Running = true
 	s.status.LastTrigger = trigger
@@ -228,16 +332,13 @@ func (s *Server) runSync(ctx context.Context, trigger string) (syncer.Result, er
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	finishedAt := time.Now().UTC()
 	s.status.Running = false
 	s.status.LastFinishedAt = &finishedAt
-
 	if err != nil {
 		s.status.LastError = err.Error()
 		return syncer.Result{}, err
 	}
-
 	s.status.LastResult = &result
 	s.status.LastSuccessAt = &finishedAt
 	return result, nil
@@ -256,12 +357,10 @@ func (s *Server) publicRecords(ctx context.Context) ([]model.Record, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	observedRecords, err := s.lister.ListRecords(ctx, s.cfg.Domain)
 	if err != nil {
 		return nil, err
 	}
-
 	return buildRecordInventory(desiredRecords, observedRecords, s.cfg.Domain), nil
 }
 
@@ -269,8 +368,14 @@ func (s *Server) localRecords(ctx context.Context) ([]model.Record, error) {
 	if s.local == nil {
 		return []model.Record{}, nil
 	}
-
 	return s.local.LocalRecords(ctx)
+}
+
+func (s *Server) ingressRecords(ctx context.Context) ([]model.Record, error) {
+	if s.ingress == nil {
+		return []model.Record{}, nil
+	}
+	return s.ingress.IngressRecords(ctx)
 }
 
 func (s *Server) allRecords(ctx context.Context) ([]model.Record, error) {
@@ -278,13 +383,16 @@ func (s *Server) allRecords(ctx context.Context) ([]model.Record, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	localRecords, err := s.localRecords(ctx)
 	if err != nil {
 		return nil, err
 	}
-
+	ingressRecords, err := s.ingressRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
 	records := append(publicRecords, localRecords...)
+	records = append(records, ingressRecords...)
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].FQDN == records[j].FQDN {
 			if records[i].Type == records[j].Type {
@@ -294,7 +402,6 @@ func (s *Server) allRecords(ctx context.Context) ([]model.Record, error) {
 		}
 		return records[i].FQDN < records[j].FQDN
 	})
-
 	return records, nil
 }
 
@@ -303,7 +410,6 @@ func buildRecordInventory(desired []syncer.DesiredRecord, observed []porkbun.Rec
 		name string
 		typ  string
 	}
-
 	type observedRecord struct {
 		values []string
 		ttl    string
@@ -423,7 +529,7 @@ func normalizeRecordName(name, domain string) string {
 
 func fqdn(name, domain string) string {
 	if name == "" {
-		return domain
+		return strings.Trim(strings.ToLower(domain), ".")
 	}
-	return fmt.Sprintf("%s.%s", name, domain)
+	return strings.Trim(strings.ToLower(name), ".") + "." + strings.Trim(strings.ToLower(domain), ".")
 }

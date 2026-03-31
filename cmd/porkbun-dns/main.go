@@ -12,9 +12,12 @@ import (
 
 	"porkbun-dns/internal/api"
 	"porkbun-dns/internal/config"
+	"porkbun-dns/internal/control"
 	"porkbun-dns/internal/porkbun"
+	caddyprovider "porkbun-dns/internal/providers/caddy"
 	piholeprovider "porkbun-dns/internal/providers/pihole"
 	"porkbun-dns/internal/publicip"
+	"porkbun-dns/internal/store"
 	"porkbun-dns/internal/syncer"
 	"porkbun-dns/internal/tailscale"
 )
@@ -28,13 +31,13 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	svc, client, piHoleClient := buildService(cfg)
+	svc, client, piHoleClient, caddyClient, controlPlane := buildService(cfg)
 	if cfg.APIEnabled {
 		server := api.NewServer(api.Config{
 			ListenAddr:   cfg.APIListenAddr,
 			Domain:       cfg.Domain,
 			SyncInterval: cfg.SyncInterval,
-		}, svc, svc, client, piHoleClient)
+		}, svc, svc, client, piHoleClient, caddyClient, controlPlane)
 
 		if err := server.Run(ctx); err != nil {
 			log.Fatalf("api failed: %v", err)
@@ -60,7 +63,7 @@ func main() {
 	)
 }
 
-func buildService(cfg config.Config) (*syncer.Service, *porkbun.Client, *piholeprovider.Client) {
+func buildService(cfg config.Config) (*syncer.Service, *porkbun.Client, *piholeprovider.Client, *caddyprovider.Client, *control.Service) {
 	ts := tailscale.NewCLI(cfg.TailscaleBinary)
 	client := porkbun.NewClient(cfg.APIKey, cfg.SecretAPIKey, cfg.BaseURL)
 
@@ -83,7 +86,15 @@ func buildService(cfg config.Config) (*syncer.Service, *porkbun.Client, *piholep
 		piHoleClient = piholeprovider.NewClient(cfg.PiHoleAPIURL, cfg.PiHolePassword)
 	}
 
-	return syncer.New(ts, publicIPv4, publicIPv6, client, cfg), client, piHoleClient
+	var caddyClient *caddyprovider.Client
+	if cfg.CaddyEnabled {
+		caddyClient = caddyprovider.NewClient(cfg.CaddyfilePath, cfg.CaddyTLSImport)
+	}
+
+	stateStore := store.NewFileStore(cfg.StateFilePath)
+	controlPlane := control.New(stateStore, client, piHoleClient, caddyClient, cfg.Domain)
+
+	return syncer.New(ts, publicIPv4, publicIPv6, client, cfg), client, piHoleClient, caddyClient, controlPlane
 }
 
 type staticIPv6Source struct {

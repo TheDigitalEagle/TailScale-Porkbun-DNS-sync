@@ -1,0 +1,145 @@
+:root {
+  --bg: #f4efe6;
+  --paper: #fffaf2;
+  --ink: #1b1a17;
+  --muted: #5e5a52;
+  --line: #d8ccbc;
+  --accent: #0b6e4f;
+  --accent-2: #d76a03;
+  --danger: #b42318;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, #fff7d6 0, transparent 25%),
+    linear-gradient(180deg, #efe5d0 0%, var(--bg) 35%, #efe7db 100%);
+}
+
+.shell {
+  width: min(1180px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 2rem 0 4rem;
+}
+
+.hero h1 {
+  margin: 0.2rem 0 0.75rem;
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-size: clamp(2rem, 4vw, 3.6rem);
+  line-height: 1;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
+.lede {
+  max-width: 55rem;
+  color: var(--muted);
+}
+
+.panel {
+  margin-top: 1.5rem;
+  padding: 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 250, 242, 0.88);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 50px rgba(71, 53, 25, 0.08);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.form-header,
+.actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+label {
+  display: grid;
+  gap: 0.4rem;
+  font-weight: 600;
+  margin-top: 1rem;
+}
+
+input, textarea, button {
+  font: inherit;
+}
+
+input, textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.8rem 0.9rem;
+  background: #fff;
+}
+
+textarea {
+  min-height: 10rem;
+  resize: vertical;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.8rem 1rem;
+  cursor: pointer;
+  background: var(--accent);
+  color: white;
+  font-weight: 700;
+}
+
+button.secondary { background: var(--accent-2); }
+button.danger { background: var(--danger); }
+
+.list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: white;
+  padding: 0.9rem;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .grid, .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-header, .actions {
+    flex-wrap: wrap;
+  }
+}

@@ -56,6 +56,15 @@ type configResponse struct {
 	} `json:"config"`
 }
 
+type patchConfigRequest struct {
+	Config struct {
+		DNS struct {
+			Hosts        []string `json:"hosts,omitempty"`
+			CNAMERecords []string `json:"cnameRecords,omitempty"`
+		} `json:"dns"`
+	} `json:"config"`
+}
+
 func (c *Client) LocalRecords(ctx context.Context) ([]model.Record, error) {
 	sid, err := c.authenticate(ctx)
 	if err != nil {
@@ -82,6 +91,52 @@ func (c *Client) LocalRecords(ctx context.Context) ([]model.Record, error) {
 	})
 
 	return records, nil
+}
+
+func (c *Client) UpsertEntry(ctx context.Context, entry model.Entry) error {
+	sid, err := c.authenticate(ctx)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := c.config(ctx, sid)
+	if err != nil {
+		return err
+	}
+
+	hosts := filterHosts(cfg.Config.DNS.Hosts, entry.Name)
+	cnames := filterCNAMEs(cfg.Config.DNS.CNAMERecords, entry.Name)
+
+	for _, record := range entry.Local {
+		switch strings.ToUpper(record.Type) {
+		case "A", "AAAA":
+			for _, value := range record.Values {
+				hosts = append(hosts, fmt.Sprintf("%s %s", value, strings.ToLower(entry.Name)))
+			}
+		case "CNAME":
+			for _, value := range record.Values {
+				cnames = append(cnames, fmt.Sprintf("%s,%s", strings.ToLower(entry.Name), strings.ToLower(value)))
+			}
+		}
+	}
+
+	return c.patchConfig(ctx, sid, hosts, cnames)
+}
+
+func (c *Client) DeleteEntry(ctx context.Context, fqdn string) error {
+	sid, err := c.authenticate(ctx)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := c.config(ctx, sid)
+	if err != nil {
+		return err
+	}
+
+	hosts := filterHosts(cfg.Config.DNS.Hosts, fqdn)
+	cnames := filterCNAMEs(cfg.Config.DNS.CNAMERecords, fqdn)
+	return c.patchConfig(ctx, sid, hosts, cnames)
 }
 
 func (c *Client) authenticate(ctx context.Context) (string, error) {
@@ -141,6 +196,30 @@ func (c *Client) do(req *http.Request, out any) error {
 		return fmt.Errorf("decode response: %w", err)
 	}
 
+	return nil
+}
+
+func (c *Client) patchConfig(ctx context.Context, sid string, hosts, cnames []string) error {
+	var payload patchConfigRequest
+	payload.Config.DNS.Hosts = hosts
+	payload.Config.DNS.CNAMERecords = cnames
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal config patch: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, addPath(c.baseURL, "/config"), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build config patch: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("sid", sid)
+
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return fmt.Errorf("patch pihole config: %w", err)
+	}
 	return nil
 }
 
@@ -234,4 +313,37 @@ func addPath(base, path string) string {
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + path
 	return u.String()
+}
+
+func filterHosts(entries []string, fqdn string) []string {
+	filtered := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		fields := strings.Fields(strings.ToLower(strings.TrimSpace(entry)))
+		matched := false
+		for _, field := range fields[1:] {
+			if strings.Trim(field, ".") == strings.Trim(strings.ToLower(fqdn), ".") {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func filterCNAMEs(entries []string, fqdn string) []string {
+	filtered := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		parts := strings.Split(entry, ",")
+		if len(parts) == 0 {
+			continue
+		}
+		if strings.Trim(strings.ToLower(parts[0]), ".") == strings.Trim(strings.ToLower(fqdn), ".") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }

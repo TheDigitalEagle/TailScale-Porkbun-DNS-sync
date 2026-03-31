@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DNS Control Plane</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">DNS Control Plane</p>
+        <h1>Public, local, and ingress records in one place.</h1>
+        <p class="lede">This first frontend manages desired entries, previews provider changes, and shows drift across Porkbun, Pi-hole, and Caddy.</p>
+      </section>
+
+      <section class="panel grid">
+        <div>
+          <h2>Saved Entries</h2>
+          <div id="entries" class="list"></div>
+        </div>
+        <div>
+          <h2>Inventory</h2>
+          <div id="inventory" class="list"></div>
+        </div>
+      </section>
+
+      <section class="panel form-panel">
+        <div class="form-header">
+          <h2>Entry Editor</h2>
+          <button id="apply-all" class="secondary">Apply Saved Entries</button>
+        </div>
+
+        <label>Hostname
+          <input id="name" placeholder="pihole.int.ima.fish">
+        </label>
+
+        <div class="form-grid">
+          <label>Public A/AAAA/CNAME
+            <textarea id="public" placeholder='[{"type":"AAAA","values":["2600:..."],"ttl":"600"}]'></textarea>
+          </label>
+          <label>Local A/AAAA/CNAME
+            <textarea id="local" placeholder='[{"type":"A","values":["192.168.2.2"]}]'></textarea>
+          </label>
+          <label>HTTP Route
+            <textarea id="http" placeholder='{"enabled":true,"upstream":"192.168.2.2:8008","tls_import":"tls_porkbun","root_redirect_to":"/admin/"}'></textarea>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="preview">Preview</button>
+          <button id="save" class="secondary">Save</button>
+          <button id="apply">Apply</button>
+          <button id="delete" class="danger">Delete</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Change Preview</h2>
+        <div id="changes" class="list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Sync Status</h2>
+        <pre id="sync-status"></pre>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

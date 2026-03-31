@@ -64,10 +64,56 @@ func (f fakeLocalSource) LocalRecords(context.Context) ([]model.Record, error) {
 	return f.records, nil
 }
 
+type fakeIngressSource struct {
+	records []model.Record
+	err     error
+}
+
+func (f fakeIngressSource) IngressRecords(context.Context) ([]model.Record, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.records, nil
+}
+
+type fakeControl struct {
+	entries []model.Entry
+	changes []model.Change
+	err     error
+}
+
+func (f *fakeControl) Entries(context.Context) ([]model.Entry, error) {
+	return f.entries, f.err
+}
+
+func (f *fakeControl) SaveEntry(context.Context, model.Entry) error {
+	return f.err
+}
+
+func (f *fakeControl) PreviewEntry(context.Context, model.Entry) ([]model.Change, error) {
+	return f.changes, f.err
+}
+
+func (f *fakeControl) ApplyEntry(context.Context, model.Entry) ([]model.Change, error) {
+	return f.changes, f.err
+}
+
+func (f *fakeControl) ApplyStored(context.Context) ([]model.Change, error) {
+	return f.changes, f.err
+}
+
+func (f *fakeControl) DeleteEntry(context.Context, string) ([]model.Change, bool, error) {
+	return f.changes, true, f.err
+}
+
+func newServer(runner *fakeRunner, desired fakeDesiredSource, lister fakeLister, local fakeLocalSource, ingress fakeIngressSource, control *fakeControl) *Server {
+	return NewServer(Config{Domain: "ima.fish"}, runner, desired, lister, local, ingress, control)
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(Config{Domain: "ima.fish"}, &fakeRunner{}, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{})
+	server := newServer(&fakeRunner{}, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{}, fakeIngressSource{}, &fakeControl{})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
@@ -85,7 +131,7 @@ func TestSyncRunEndpoint(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{result: syncer.Result{Created: 1, Desired: 1}}
-	server := NewServer(Config{Domain: "ima.fish"}, runner, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{})
+	server := newServer(runner, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{}, fakeIngressSource{}, &fakeControl{})
 	req := httptest.NewRequest(http.MethodPost, "/sync/run", nil)
 	rec := httptest.NewRecorder()
 
@@ -102,7 +148,7 @@ func TestSyncRunEndpoint(t *testing.T) {
 func TestSyncStatusEndpoint(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(Config{Domain: "ima.fish"}, &fakeRunner{}, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{})
+	server := newServer(&fakeRunner{}, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{}, fakeIngressSource{}, &fakeControl{})
 	_, err := server.runSync(context.Background(), "manual")
 	if err != nil {
 		t.Fatalf("runSync() error = %v", err)
@@ -131,7 +177,7 @@ func TestSyncStatusEndpoint(t *testing.T) {
 func TestPublicRecordsEndpoint(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(Config{Domain: "ima.fish"}, &fakeRunner{}, fakeDesiredSource{
+	server := newServer(&fakeRunner{}, fakeDesiredSource{
 		records: []syncer.DesiredRecord{
 			{Name: "pihole.int", Type: "AAAA", Values: []string{"2001:db8::2"}, TTL: "600", Scope: "public", Owner: "derived", SourceOfTruth: "porkbun-dns", Targets: []string{"porkbun"}},
 			{Name: "", Type: "A", Values: []string{"198.51.100.10"}, TTL: "600", Scope: "public", Owner: "derived", SourceOfTruth: "public-ip", Targets: []string{"porkbun"}},
@@ -142,7 +188,7 @@ func TestPublicRecordsEndpoint(t *testing.T) {
 			{Name: "ima.fish", Type: "A", Content: "198.51.100.10", TTL: "600"},
 			{Name: "www", Type: "A", Content: "198.51.100.11", TTL: "600"},
 		},
-	}, fakeLocalSource{})
+	}, fakeLocalSource{}, fakeIngressSource{}, &fakeControl{})
 
 	req := httptest.NewRequest(http.MethodGet, "/records/public", nil)
 	rec := httptest.NewRecorder()
@@ -175,9 +221,9 @@ func TestPublicRecordsEndpoint(t *testing.T) {
 func TestPublicRecordsEndpointError(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(Config{Domain: "ima.fish"}, &fakeRunner{}, fakeDesiredSource{}, fakeLister{
+	server := newServer(&fakeRunner{}, fakeDesiredSource{}, fakeLister{
 		err: errors.New("upstream failed"),
-	}, fakeLocalSource{})
+	}, fakeLocalSource{}, fakeIngressSource{}, &fakeControl{})
 
 	req := httptest.NewRequest(http.MethodGet, "/records/public", nil)
 	rec := httptest.NewRecorder()
@@ -191,7 +237,7 @@ func TestPublicRecordsEndpointError(t *testing.T) {
 func TestRecordsEndpoint(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(Config{Domain: "ima.fish"}, &fakeRunner{}, fakeDesiredSource{
+	server := newServer(&fakeRunner{}, fakeDesiredSource{
 		records: []syncer.DesiredRecord{
 			{Name: "pihole.int", Type: "AAAA", Values: []string{"2001:db8::2"}, TTL: "600", Scope: "public", Owner: "derived", SourceOfTruth: "porkbun-dns", Targets: []string{"porkbun"}},
 		},
@@ -213,7 +259,21 @@ func TestRecordsEndpoint(t *testing.T) {
 				ObservedValues: []string{"192.168.2.1"},
 			},
 		},
-	})
+	}, fakeIngressSource{
+		records: []model.Record{
+			{
+				Name:           "pihole.int.ima.fish",
+				FQDN:           "pihole.int.ima.fish",
+				Type:           "HTTP_PROXY",
+				Scope:          "ingress",
+				Owner:          "provider-managed",
+				SourceOfTruth:  "caddy",
+				Targets:        []string{"caddy"},
+				Status:         "unmanaged",
+				ObservedValues: []string{"192.168.2.2:8008"},
+			},
+		},
+	}, &fakeControl{})
 
 	req := httptest.NewRequest(http.MethodGet, "/records", nil)
 	rec := httptest.NewRecorder()
@@ -229,7 +289,7 @@ func TestRecordsEndpoint(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode records: %v", err)
 	}
-	if got, want := len(response.Records), 2; got != want {
+	if got, want := len(response.Records), 3; got != want {
 		t.Fatalf("len(records) = %d, want %d", got, want)
 	}
 	if got, want := response.Records[0].Status, "drifted"; got != want {
@@ -241,15 +301,18 @@ func TestRecordsEndpoint(t *testing.T) {
 	if got, want := response.Records[0].ObservedValues[0], "2001:db8::3"; got != want {
 		t.Fatalf("observed_values[0] = %q, want %q", got, want)
 	}
-	if got, want := response.Records[1].Scope, "local"; got != want {
+	if got, want := response.Records[1].Scope, "ingress"; got != want {
 		t.Fatalf("records[1].Scope = %q, want %q", got, want)
+	}
+	if got, want := response.Records[2].Scope, "local"; got != want {
+		t.Fatalf("records[2].Scope = %q, want %q", got, want)
 	}
 }
 
 func TestLocalRecordsEndpoint(t *testing.T) {
 	t.Parallel()
 
-	server := NewServer(Config{Domain: "ima.fish"}, &fakeRunner{}, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{
+	server := newServer(&fakeRunner{}, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{
 		records: []model.Record{
 			{
 				Name:           "router.int.ima.fish",
@@ -263,7 +326,7 @@ func TestLocalRecordsEndpoint(t *testing.T) {
 				ObservedValues: []string{"192.168.2.1"},
 			},
 		},
-	})
+	}, fakeIngressSource{}, &fakeControl{})
 
 	req := httptest.NewRequest(http.MethodGet, "/records/local", nil)
 	rec := httptest.NewRecorder()
@@ -284,5 +347,21 @@ func TestLocalRecordsEndpoint(t *testing.T) {
 	}
 	if got, want := response.Records[0].SourceOfTruth, "pihole"; got != want {
 		t.Fatalf("source_of_truth = %q, want %q", got, want)
+	}
+}
+
+func TestEntriesEndpoint(t *testing.T) {
+	t.Parallel()
+
+	server := newServer(&fakeRunner{}, fakeDesiredSource{}, fakeLister{}, fakeLocalSource{}, fakeIngressSource{}, &fakeControl{
+		entries: []model.Entry{{Name: "pihole.int.ima.fish"}},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/entries", nil)
+	rec := httptest.NewRecorder()
+	server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }

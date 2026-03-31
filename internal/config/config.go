@@ -10,15 +10,17 @@ import (
 )
 
 const (
-	defaultBaseURL       = "https://api.porkbun.com/api/json/v3"
-	defaultTailscaleBin  = "tailscale"
-	defaultRecordType    = "A"
-	defaultSubdomain     = "int"
-	defaultTTL           = 600
-	defaultPublicIPURL   = "https://api.ipify.org"
-	defaultPublicIPv6URL = "https://api6.ipify.org"
-	defaultAPIListenAddr = ":8080"
-	defaultPiHoleAPIURL  = "http://192.168.2.2:8008/api"
+	defaultBaseURL        = "https://api.porkbun.com/api/json/v3"
+	defaultTailscaleBin   = "tailscale"
+	defaultRecordType     = "A"
+	defaultSubdomain      = "int"
+	defaultTTL            = 600
+	defaultPublicIPURL    = "https://api.ipify.org"
+	defaultPublicIPv6URL  = "https://api6.ipify.org"
+	defaultAPIListenAddr  = ":8080"
+	defaultPiHoleAPIURL   = "http://192.168.2.2:8008/api"
+	defaultStateFilePath  = "/var/lib/porkbun-dns/state.json"
+	defaultCaddyTLSImport = "tls_porkbun"
 )
 
 type Config struct {
@@ -43,6 +45,10 @@ type Config struct {
 	PiHoleEnabled         bool
 	PiHoleAPIURL          string
 	PiHolePassword        string
+	StateFilePath         string
+	CaddyEnabled          bool
+	CaddyfilePath         string
+	CaddyTLSImport        string
 }
 
 func Load() (Config, error) {
@@ -59,6 +65,9 @@ func Load() (Config, error) {
 		APIListenAddr:       strings.TrimSpace(os.Getenv("API_LISTEN_ADDR")),
 		PiHoleAPIURL:        strings.TrimSpace(os.Getenv("PIHOLE_API_URL")),
 		PiHolePassword:      strings.TrimSpace(os.Getenv("PIHOLE_PASSWORD")),
+		StateFilePath:       strings.TrimSpace(os.Getenv("STATE_FILE_PATH")),
+		CaddyfilePath:       strings.TrimSpace(os.Getenv("CADDYFILE_PATH")),
+		CaddyTLSImport:      strings.TrimSpace(os.Getenv("CADDY_TLS_IMPORT")),
 	}
 
 	if cfg.SubdomainSuffix == "" {
@@ -81,6 +90,12 @@ func Load() (Config, error) {
 	}
 	if cfg.PiHoleAPIURL == "" {
 		cfg.PiHoleAPIURL = defaultPiHoleAPIURL
+	}
+	if cfg.StateFilePath == "" {
+		cfg.StateFilePath = defaultStateFilePath
+	}
+	if cfg.CaddyTLSImport == "" {
+		cfg.CaddyTLSImport = defaultCaddyTLSImport
 	}
 
 	ttl, err := intFromEnv("PORKBUN_TTL", defaultTTL)
@@ -120,6 +135,12 @@ func Load() (Config, error) {
 	}
 	cfg.PiHoleEnabled = piHoleEnabled
 
+	caddyEnabled, err := boolFromEnv("CADDY_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.CaddyEnabled = caddyEnabled
+
 	syncInterval, err := secondsDurationFromEnv("SYNC_INTERVAL")
 	if err != nil {
 		return Config{}, err
@@ -153,6 +174,8 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("PIHOLE_API_URL is required when PIHOLE_ENABLED is true")
 	case cfg.PiHoleEnabled && cfg.PiHolePassword == "":
 		return Config{}, fmt.Errorf("PIHOLE_PASSWORD is required when PIHOLE_ENABLED is true")
+	case cfg.CaddyEnabled && cfg.CaddyfilePath == "":
+		return Config{}, fmt.Errorf("CADDYFILE_PATH is required when CADDY_ENABLED is true")
 	}
 
 	return cfg, nil
