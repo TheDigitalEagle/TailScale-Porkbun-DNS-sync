@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>DNS Control Plane</title>
+    <title>Fishbowl</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -14,11 +14,18 @@
       <section class="hero panel">
         <div class="hero-copy">
           <p class="eyebrow">Fishbowl</p>
-          <h1>See public, local, and ingress DNS from one dark console.</h1>
+          <div class="hero-kicker-row">
+            <span class="hero-chip">Public</span>
+            <span class="hero-chip">Local</span>
+            <span class="hero-chip">Ingress</span>
+          </div>
           <p class="lede">
-            Review drift, edit desired state, preview provider changes, and push updates across Porkbun,
-            Pi-hole, and Caddy without leaving the same control surface.
+            Pixel fish represent live DNS records and drift. More records means a busier bowl.
           </p>
+        </div>
+
+        <div class="aquarium-shell">
+          <canvas id="aquarium" class="aquarium" aria-label="Animated pixel fish aquarium"></canvas>
         </div>
 
         <div class="hero-stats">

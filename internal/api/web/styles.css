@@ -140,12 +140,69 @@ button {
   color: var(--accent);
 }
 
-.lede {
-  max-width: 60rem;
+.eyebrow {
   margin: 0;
+  font-family: "Sora", "Space Grotesk", sans-serif;
+  font-size: clamp(1rem, 2vw, 1.3rem);
+  font-weight: 800;
+}
+
+.hero-kicker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+
+.hero-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(14, 26, 44, 0.8);
   color: var(--muted);
-  font-size: 1rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.lede {
+  max-width: 36rem;
+  margin: 0.8rem 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
   line-height: 1.6;
+}
+
+.aquarium-shell {
+  position: relative;
+  min-height: 16rem;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius-xl) - 4px);
+  background:
+    linear-gradient(180deg, rgba(22, 58, 97, 0.28), rgba(7, 19, 35, 0.12) 45%, rgba(3, 10, 20, 0.82)),
+    radial-gradient(circle at top, rgba(110, 184, 255, 0.16), transparent 55%);
+  overflow: hidden;
+}
+
+.aquarium-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(transparent 0 78%, rgba(162, 255, 224, 0.08) 78% 79%, transparent 79%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 100% 100%, 24px 24px;
+  pointer-events: none;
+}
+
+.aquarium {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 16rem;
+  image-rendering: pixelated;
 }
 
 .hero-stats {
@@ -538,6 +595,11 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .aquarium-shell,
+  .aquarium {
+    min-height: 14rem;
+  }
+
   .section-heading {
     flex-direction: column;
   }
@@ -559,6 +621,15 @@ pre {
 
   .hero-copy h1 {
     font-size: clamp(2rem, 12vw, 3rem);
+  }
+
+  .eyebrow {
+    font-size: 1.1rem;
+  }
+
+  .aquarium-shell,
+  .aquarium {
+    min-height: 12.5rem;
   }
 
   .actions {
