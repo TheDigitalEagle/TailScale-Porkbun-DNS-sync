@@ -396,8 +396,8 @@ function createFish(record, index) {
     label: record.fqdn || record.name || 'record',
     x: (hash % 1000) / 1000,
     y: ((hash >> 4) % 1000) / 1000,
-    vx: (hash % 2 === 0 ? 1 : -1) * (0.00055 + ((hash >> 8) % 6) * 0.00008),
-    vy: (((hash >> 12) % 5) - 2) * 0.00009,
+    vx: (hash % 2 === 0 ? 1 : -1) * (0.00016 + ((hash >> 8) % 6) * 0.000022),
+    vy: (((hash >> 12) % 5) - 2) * 0.000028,
     bob: ((hash >> 16) % 1000) / 1000,
     size: 2 + (hash % 3),
     colors: palette,
@@ -497,7 +497,7 @@ function updateFish(fish, delta, width, height, timestamp) {
   }
 
   if (fish.status === 'drifted') {
-    fish.vx *= 1.0004;
+    fish.vx *= 1.00008;
   }
 }
 
